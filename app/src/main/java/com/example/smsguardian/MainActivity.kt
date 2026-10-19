@@ -121,7 +121,7 @@ class MainActivity : ComponentActivity() {
             MaterialTheme(colorScheme = darkColorScheme(primary = Cyan, background = Navy, surface = Panel, onBackground = TextWhite, onSurface = TextWhite)) {
                 Surface(Modifier.fillMaxSize(), color = Navy) {
                     Column(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF0D2140), Navy)))) {
-                        Header(isFa, page) { page = it }
+                        Header(isFa, page)
                         when (page) {
                             "rules" -> RulesPage(isFa, refresh) { refresh++ }
                             "settings" -> SettingsPage(isFa, language, { language = it; getPreferences(MODE_PRIVATE).edit().putString("language", it).apply() }, { requestDefaultSmsRole() })
