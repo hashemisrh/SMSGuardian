@@ -13,6 +13,9 @@ import android.content.Intent
 import android.net.Uri
 import android.content.pm.PackageManager
 import android.database.Cursor
+import android.database.ContentObserver
+import android.os.Handler
+import android.os.Looper
 import android.os.Build
 import android.os.Bundle
 import android.provider.Telephony
@@ -38,6 +41,7 @@ import androidx.compose.material.icons.filled.FilterAlt
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Contacts
+import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
@@ -68,6 +72,26 @@ data class SmsRow(val address: String, val body: String, val date: Long, val typ
 
 class MainActivity : ComponentActivity() {
     private var smsRoleRefreshSignal by mutableIntStateOf(0)
+    private var smsObserver: ContentObserver? = null
+
+    override fun onResume() {
+        super.onResume()
+        if (smsObserver == null) {
+            smsObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
+                override fun onChange(selfChange: Boolean) { smsRoleRefreshSignal++ }
+                override fun onChange(selfChange: Boolean, uri: Uri?) { smsRoleRefreshSignal++ }
+            }
+            contentResolver.registerContentObserver(Telephony.Sms.CONTENT_URI, true, smsObserver!!)
+            contentResolver.registerContentObserver(Telephony.Mms.CONTENT_URI, true, smsObserver!!)
+        }
+        smsRoleRefreshSignal++
+    }
+
+    override fun onPause() {
+        smsObserver?.let { contentResolver.unregisterContentObserver(it) }
+        smsObserver = null
+        super.onPause()
+    }
 
     // SMS permissions are restricted on modern Android. Always request the SMS role first;
     // asking for READ/RECEIVE/SEND_SMS before the role is granted causes Android to deny access.
@@ -241,7 +265,7 @@ class MainActivity : ComponentActivity() {
         var language by remember { mutableStateOf(getPreferences(MODE_PRIVATE).getString("language", "fa") ?: "fa") }
         var page by remember { mutableStateOf("chats") }
         var bgChoice by remember { mutableIntStateOf(getPreferences(MODE_PRIVATE).getInt("bg_choice", 0)) }
-        val appBg = when (bgChoice) { 1 -> Color(0xFF24152F); 2 -> Color(0xFF102A24); else -> Navy }
+        val appBg = when (bgChoice) { 1 -> Color(0xFF24152F); 2 -> Color(0xFF102A24); 3 -> Color.White; else -> Navy }
         var refresh by remember { mutableIntStateOf(0) }
         LaunchedEffect(smsRoleRefreshSignal) { refresh++ }
         val isFa = language == "fa"
@@ -273,7 +297,7 @@ class MainActivity : ComponentActivity() {
 
     @Composable private fun Header(isFa: Boolean, page: String, toggleLanguage: () -> Unit, navigate: (String) -> Unit) {
         var menuExpanded by remember { mutableStateOf(false) }
-        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 18.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(bottomStart = 18.dp, bottomEnd = 18.dp)).padding(horizontal = 20.dp, vertical = 18.dp), verticalAlignment = Alignment.CenterVertically) {
             Box {
                 IconButton(onClick = { menuExpanded = true }) { Icon(Icons.Default.Menu, contentDescription = if (isFa) "منو" else "Menu", tint = Cyan) }
                 DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
@@ -317,7 +341,18 @@ class MainActivity : ComponentActivity() {
                     IconButton(onClick = { selectedNumber = null; threadMessage = "" }) { Icon(Icons.Default.ArrowBack, contentDescription = if (isFa) "بازگشت" else "Back", tint = Cyan) }
                     Column(Modifier.weight(1f)) {
                         Text(lookupContactName(currentNumber) ?: currentNumber, color = TextWhite, fontWeight = FontWeight.Bold)
-                        Text(if (isFa) "گفتگو" else "Conversation", color = Muted, style = MaterialTheme.typography.labelSmall)
+                        Text(currentNumber, color = Muted, style = MaterialTheme.typography.labelSmall)
+                    }
+                    if (lookupContactName(currentNumber) == null) {
+                        IconButton(onClick = {
+                            runCatching {
+                                val add = Intent(ContactsContract.Intents.Insert.ACTION).apply {
+                                    type = ContactsContract.RawContacts.CONTENT_TYPE
+                                    putExtra(ContactsContract.Intents.Insert.PHONE, currentNumber)
+                                }
+                                startActivity(add)
+                            }.onFailure { android.widget.Toast.makeText(this@MainActivity, if (isFa) "باز کردن افزودن مخاطب ممکن نشد" else "Could not open contact creation", android.widget.Toast.LENGTH_SHORT).show() }
+                        }) { Icon(Icons.Default.PersonAdd, contentDescription = if (isFa) "افزودن به مخاطبین" else "Add to contacts", tint = Cyan) }
                     }
                     IconButton(onClick = { runCatching { startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:${Uri.encode(currentNumber)}"))) } }) {
                         Icon(Icons.Default.Call, contentDescription = if (isFa) "تماس" else "Call", tint = Cyan)
@@ -630,7 +665,7 @@ class MainActivity : ComponentActivity() {
             Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(if (isFa) "رنگ زمینه برنامه" else "App background color", color = TextWhite, fontWeight = FontWeight.Bold)
-                    listOf((0 to (if (isFa) "آبی تیره" else "Midnight blue")), (1 to (if (isFa) "بنفش" else "Purple")), (2 to (if (isFa) "سبز جنگلی" else "Forest green"))).forEach { (choice, label) ->
+                    listOf((0 to (if (isFa) "آبی تیره" else "Midnight blue")), (1 to (if (isFa) "بنفش" else "Purple")), (2 to (if (isFa) "سبز جنگلی" else "Forest green")), (3 to (if (isFa) "سفید" else "White"))).forEach { (choice, label) ->
                         Row(Modifier.fillMaxWidth().clickable { changeBackground(choice) }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                             RadioButton(selected = bgChoice == choice, onClick = { changeBackground(choice) })
                             Text(label, color = TextWhite)
