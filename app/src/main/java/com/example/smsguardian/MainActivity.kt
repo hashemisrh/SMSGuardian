@@ -24,6 +24,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.FilterAlt
 import androidx.compose.material.icons.filled.Language
@@ -36,6 +38,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.foundation.clickable
+import androidx.core.view.WindowCompat
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
@@ -54,10 +58,15 @@ data class SmsRow(val address: String, val body: String, val date: Long, val typ
 
 class MainActivity : ComponentActivity() {
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
-    private val roleLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { }
+    private val roleLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (Telephony.Sms.getDefaultSmsPackage(this) != packageName) {
+            android.widget.Toast.makeText(this, "SMS role was not granted. Check Android Settings > Apps > Default apps > SMS app.", android.widget.Toast.LENGTH_LONG).show()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, true)
         askRuntimePermissions()
         setContent { GuardianApp() }
     }
@@ -90,8 +99,10 @@ class MainActivity : ComponentActivity() {
                 @Suppress("DEPRECATION")
                 SmsManager.getDefault()
             }
-            manager.sendTextMessage(destination.trim(), null, message, null, null)
-            // For a default SMS app, sent messages should be stored in the SMS provider.
+            val parts = manager.divideMessage(message)
+            if (parts.size > 1) manager.sendMultipartTextMessage(destination.trim(), null, parts, null, null)
+            else manager.sendTextMessage(destination.trim(), null, message, null, null)
+            // Android's default SMS provider is writable only for the default SMS handler.
             if (Telephony.Sms.getDefaultSmsPackage(this) == packageName) {
                 val values = ContentValues().apply {
                     put(Telephony.Sms.ADDRESS, destination.trim()); put(Telephony.Sms.BODY, message)
@@ -100,14 +111,18 @@ class MainActivity : ComponentActivity() {
                 }
                 contentResolver.insert(Telephony.Sms.Sent.CONTENT_URI, values)
             }
-        } catch (e: Exception) { android.util.Log.e("SMSGuardian", "SMS send failed", e) }
+            android.widget.Toast.makeText(this, "SMS submitted to the mobile network", android.widget.Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            android.util.Log.e("SMSGuardian", "SMS send failed", e)
+            android.widget.Toast.makeText(this, "SMS send failed: ${e.message ?: "check permissions and SIM"}", android.widget.Toast.LENGTH_LONG).show()
+        }
     }
 
     fun getSmsRows(): List<SmsRow> {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) return emptyList()
         val rows = mutableListOf<SmsRow>()
         val cursor: Cursor? = contentResolver.query(Telephony.Sms.CONTENT_URI, arrayOf(Telephony.Sms.ADDRESS, Telephony.Sms.BODY, Telephony.Sms.DATE, Telephony.Sms.TYPE), null, null, "date DESC")
-        cursor?.use { while (it.moveToNext() && rows.size < 100) rows.add(SmsRow(it.getString(0).orEmpty(), it.getString(1).orEmpty(), it.getLong(2), it.getInt(3))) }
+        cursor?.use { while (it.moveToNext()) rows.add(SmsRow(it.getString(0).orEmpty(), it.getString(1).orEmpty(), it.getLong(2), it.getInt(3))) }
         return rows
     }
 
@@ -120,14 +135,14 @@ class MainActivity : ComponentActivity() {
         CompositionLocalProvider(LocalLayoutDirection provides direction) {
             MaterialTheme(colorScheme = darkColorScheme(primary = Cyan, background = Navy, surface = Panel, onBackground = TextWhite, onSurface = TextWhite)) {
                 Surface(Modifier.fillMaxSize(), color = Navy) {
-                    Column(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF0D2140), Navy)))) {
-                        Header(isFa, page)
+                    Column(Modifier.fillMaxSize().statusBarsPadding().background(Brush.verticalGradient(listOf(Color(0xFF0D2140), Navy)))) {
+                        Header(isFa, page) { language = if (language == "fa") "en" else "fa"; getPreferences(MODE_PRIVATE).edit().putString("language", language).apply() }
                         when (page) {
                             "rules" -> RulesPage(isFa, refresh) { refresh++ }
                             "settings" -> SettingsPage(isFa, language, { language = it; getPreferences(MODE_PRIVATE).edit().putString("language", it).apply() }, { requestDefaultSmsRole() })
                             else -> ChatsPage(isFa, refresh, ::getSmsRows, ::sendSms)
                         }
-                        NavigationBar(containerColor = Color(0xFF0A172A), contentColor = TextWhite) {
+                        NavigationBar(modifier = Modifier.navigationBarsPadding(), containerColor = Color(0xFF0A172A), contentColor = TextWhite) {
                             NavigationBarItem(selected = page == "chats", onClick = { page = "chats" }, icon = { Icon(Icons.Default.Chat, null) }, label = { Text(if (isFa) "گفتگوها" else "Chats") })
                             NavigationBarItem(selected = page == "rules", onClick = { page = "rules" }, icon = { Icon(Icons.Default.FilterAlt, null) }, label = { Text(if (isFa) "فیلترها" else "Filters") })
                             NavigationBarItem(selected = page == "settings", onClick = { page = "settings" }, icon = { Icon(Icons.Default.Settings, null) }, label = { Text(if (isFa) "تنظیمات" else "Settings") })
@@ -138,7 +153,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    @Composable private fun Header(isFa: Boolean, page: String) {
+    @Composable private fun Header(isFa: Boolean, page: String, toggleLanguage: () -> Unit) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 18.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(44.dp).background(Cyan.copy(alpha = .15f), RoundedCornerShape(15.dp)), contentAlignment = Alignment.Center) { Icon(Icons.Default.Chat, null, tint = Cyan) }
             Spacer(Modifier.width(12.dp))
@@ -146,7 +161,7 @@ class MainActivity : ComponentActivity() {
                 Text("SMS Guardian", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = TextWhite)
                 Text(if (page == "chats") { if (isFa) "پیام‌رسان امن شما" else "Your secure inbox" } else if (page == "rules") { if (isFa) "مدیریت قوانین هوشمند" else "Smart filtering rules" } else { if (isFa) "شخصی‌سازی برنامه" else "Personalize your app" }, color = Muted, style = MaterialTheme.typography.bodySmall)
             }
-            Icon(Icons.Default.Language, null, tint = Cyan)
+            Icon(Icons.Default.Language, null, tint = Cyan, modifier = Modifier.clickable(onClick = toggleLanguage).padding(8.dp))
         }
     }
 
@@ -154,35 +169,94 @@ class MainActivity : ComponentActivity() {
         var rows by remember { mutableStateOf(emptyList<SmsRow>()) }
         var destination by remember { mutableStateOf("") }
         var message by remember { mutableStateOf("") }
+        var threadMessage by remember { mutableStateOf("") }
+        var selectedNumber by remember { mutableStateOf<String?>(null) }
         var subId by remember { mutableStateOf<Int?>(null) }
         var sims by remember { mutableStateOf(emptyList<Pair<Int, String>>()) }
-        LaunchedEffect(refresh) { rows = loadRows(); sims = if (Build.VERSION.SDK_INT >= 22 && ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) runCatching { SubscriptionManager.from(this@MainActivity).activeSubscriptionInfoList.orEmpty().mapIndexed { i, s -> s.subscriptionId to (s.displayName?.toString()?.ifBlank { null } ?: if (isFa) "سیم‌کارت ${i + 1}" else "SIM ${i + 1}") } }.getOrDefault(emptyList()) else emptyList(); if (subId == null) subId = sims.firstOrNull()?.first }
-        Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-            Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(if (isFa) "پیامک جدید" else "New message", color = TextWhite, fontWeight = FontWeight.SemiBold)
-                    OutlinedTextField(destination, { destination = it }, modifier = Modifier.fillMaxWidth(), label = { Text(if (isFa) "شماره گیرنده" else "Recipient number") }, singleLine = true)
-                    OutlinedTextField(message, { message = it }, modifier = Modifier.fillMaxWidth(), label = { Text(if (isFa) "متن پیام" else "Message text") }, minLines = 2)
-                    if (sims.isNotEmpty()) {
-                        Text(if (isFa) "سیم‌کارت ارسال" else "Send using SIM", color = Muted, style = MaterialTheme.typography.labelMedium)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { sims.forEach { (id, label) -> FilterChip(selected = subId == id, onClick = { subId = id }, label = { Text(label) }) } }
+        var localRefresh by remember { mutableIntStateOf(0) }
+        LaunchedEffect(refresh, localRefresh) {
+            rows = loadRows()
+            sims = if (Build.VERSION.SDK_INT >= 22 && ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) runCatching {
+                SubscriptionManager.from(this@MainActivity).activeSubscriptionInfoList.orEmpty().mapIndexed { i, sub ->
+                    sub.subscriptionId to (sub.displayName?.toString()?.ifBlank { null } ?: if (isFa) "سیم‌کارت ${i + 1}" else "SIM ${i + 1}")
+                }
+            }.getOrDefault(emptyList()) else emptyList()
+            if (subId == null) subId = sims.firstOrNull()?.first
+        }
+        val currentNumber = selectedNumber
+        if (currentNumber != null) {
+            val thread = rows.filter { it.address.equals(currentNumber, ignoreCase = true) }.sortedBy { it.date }
+            Column(Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { selectedNumber = null; threadMessage = "" }) { Icon(Icons.Default.ArrowBack, contentDescription = if (isFa) "بازگشت" else "Back", tint = Cyan) }
+                    Column(Modifier.weight(1f)) {
+                        Text(lookupContactName(currentNumber) ?: currentNumber, color = TextWhite, fontWeight = FontWeight.Bold)
+                        Text(if (isFa) "گفتگو" else "Conversation", color = Muted, style = MaterialTheme.typography.labelSmall)
                     }
-                    Button(onClick = { send(destination, message, subId); destination = ""; message = "" }, modifier = Modifier.fillMaxWidth(), enabled = destination.isNotBlank() && message.isNotBlank()) { Icon(Icons.Default.Send, null); Spacer(Modifier.width(8.dp)); Text(if (isFa) "ارسال پیامک" else "Send SMS") }
+                    IconButton(onClick = { runCatching { startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:${Uri.encode(currentNumber)}"))) } }) {
+                        Icon(Icons.Default.Call, contentDescription = if (isFa) "تماس" else "Call", tint = Cyan)
+                    }
+                }
+                LazyColumn(Modifier.weight(1f).fillMaxWidth(), reverseLayout = false, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(thread, key = { "${it.address}-${it.date}-${it.type}" }) { row ->
+                        val outgoing = row.type == Telephony.Sms.MESSAGE_TYPE_SENT || row.type == Telephony.Sms.MESSAGE_TYPE_OUTBOX
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = if (outgoing) Arrangement.End else Arrangement.Start) {
+                            Column(Modifier.widthIn(max = 300.dp).background(if (outgoing) Color(0xFF124B59) else Panel, RoundedCornerShape(16.dp)).padding(12.dp)) {
+                                Text(row.body, color = TextWhite)
+                                Text(SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(row.date)), color = Muted, style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                    }
+                }
+                Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(value = threadMessage, onValueChange = { threadMessage = it }, modifier = Modifier.weight(1f), placeholder = { Text(if (isFa) "نوشتن پیامک..." else "Type a message...") }, maxLines = 4)
+                    IconButton(enabled = threadMessage.isNotBlank(), onClick = {
+                        send(currentNumber, threadMessage, subId)
+                        threadMessage = ""
+                        localRefresh++
+                    }) { Icon(Icons.Default.Send, contentDescription = if (isFa) "ارسال" else "Send", tint = Cyan) }
                 }
             }
-            Spacer(Modifier.height(16.dp))
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Text(if (isFa) "گفتگوهای اخیر" else "Recent messages", color = TextWhite, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold); Spacer(Modifier.weight(1f)); Text("${rows.size}", color = Cyan) }
-            Spacer(Modifier.height(8.dp))
-            if (rows.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { Text(if (isFa) "هنوز پیامکی برای نمایش نیست؛ برای مدیریت کامل، برنامه را پیام‌رسان پیش‌فرض کنید." else "No messages to show yet. Set this app as the default SMS app for full handling.", color = Muted) }
-            else LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(rows, key = { "${it.address}-${it.date}-${it.type}" }) { row ->
-                    val displayName = lookupContactName(row.address) ?: row.address
-                    val initials = initialsFor(displayName)
-                    Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
-                        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Box(Modifier.size(46.dp).background(Brush.linearGradient(listOf(Cyan, Color(0xFF356BCE))), CircleShape), contentAlignment = Alignment.Center) { Text(initials, color = Color.White, fontWeight = FontWeight.Bold) }
-                            Spacer(Modifier.width(12.dp))
-                            Column(Modifier.weight(1f)) { Text(displayName, color = TextWhite, fontWeight = FontWeight.SemiBold); Text(row.body, color = Muted, maxLines = 2); Text(SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(row.date)), color = Muted.copy(alpha = .7f), style = MaterialTheme.typography.labelSmall) }
+        } else {
+            Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+                Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(if (isFa) "پیامک جدید" else "New message", color = TextWhite, fontWeight = FontWeight.SemiBold)
+                        OutlinedTextField(value = destination, onValueChange = { destination = it }, modifier = Modifier.fillMaxWidth(), label = { Text(if (isFa) "شماره گیرنده" else "Recipient number") }, singleLine = true)
+                        OutlinedTextField(value = message, onValueChange = { message = it }, modifier = Modifier.fillMaxWidth(), label = { Text(if (isFa) "متن پیام" else "Message text") }, minLines = 2)
+                        if (sims.isNotEmpty()) {
+                            Text(if (isFa) "سیم‌کارت ارسال" else "Send using SIM", color = Muted, style = MaterialTheme.typography.labelMedium)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { sims.forEach { (id, label) -> FilterChip(selected = subId == id, onClick = { subId = id }, label = { Text(label) }) } }
+                        }
+                        Button(onClick = { send(destination, message, subId); destination = ""; message = ""; localRefresh++ }, modifier = Modifier.fillMaxWidth(), enabled = destination.isNotBlank() && message.isNotBlank()) {
+                            Icon(Icons.Default.Send, null); Spacer(Modifier.width(8.dp)); Text(if (isFa) "ارسال پیامک" else "Send SMS")
+                        }
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(if (isFa) "گفتگوها" else "Conversations", color = TextWhite, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.weight(1f)); Text("${rows.map { it.address }.distinct().size}", color = Cyan)
+                }
+                Spacer(Modifier.height(8.dp))
+                val conversations = rows.groupBy { it.address }.mapNotNull { (_, messages) -> messages.maxByOrNull { it.date } }.sortedByDescending { it.date }
+                if (conversations.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                    Text(if (isFa) "پیامکی برای نمایش پیدا نشد. برای دریافت پیامک جدید، مجوزها و پیام‌رسان پیش‌فرض را بررسی کنید." else "No messages found. Check permissions and the default SMS role to receive new messages.", color = Muted)
+                } else LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(conversations, key = { "${it.address}-${it.date}" }) { row ->
+                        val displayName = lookupContactName(row.address) ?: row.address
+                        val initials = initialsFor(displayName)
+                        Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth().clickable { selectedNumber = row.address }) {
+                            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Box(Modifier.size(46.dp).background(Brush.linearGradient(listOf(Cyan, Color(0xFF356BCE))), CircleShape), contentAlignment = Alignment.Center) { Text(initials, color = Color.White, fontWeight = FontWeight.Bold) }
+                                Spacer(Modifier.width(12.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(displayName, color = TextWhite, fontWeight = FontWeight.SemiBold)
+                                    Text(row.body, color = Muted, maxLines = 2)
+                                    Text(SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(row.date)), color = Muted.copy(alpha = .7f), style = MaterialTheme.typography.labelSmall)
+                                }
+                                IconButton(onClick = { runCatching { startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:${Uri.encode(row.address)}"))) } }) { Icon(Icons.Default.Call, contentDescription = if (isFa) "تماس" else "Call", tint = Cyan) }
+                            }
                         }
                     }
                 }
@@ -208,7 +282,6 @@ class MainActivity : ComponentActivity() {
     @Composable private fun RulesPage(isFa: Boolean, refresh: Int, changed: () -> Unit) {
         var kind by remember { mutableStateOf("word") }
         var value by remember { mutableStateOf("") }
-        var autoBlock by remember { mutableStateOf(true) }
         val words = remember(refresh) { RuleStore.words(this@MainActivity) }
         val numbers = remember(refresh) { RuleStore.numbers(this@MainActivity) }
         val prefixes = remember(refresh) { RuleStore.prefixes(this@MainActivity) }
