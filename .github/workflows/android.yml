@@ -12,7 +12,8 @@ permissions:
 
 concurrency:
   group: android-${{ github.ref }}
-  cancel-in-progress: true
+  # Do not cancel an active build when another push/workflow_dispatch starts.
+  cancel-in-progress: false
 
 jobs:
   build:
