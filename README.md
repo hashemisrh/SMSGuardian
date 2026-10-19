@@ -33,3 +33,6 @@ This source archive was updated, but an Android build could not be run in this e
 On Android 10 and newer, the app requests the **default SMS app role first**. Accept the Android system dialog and select **SMS Guardian** as the default SMS app. Only after that will the app request unrelated permissions such as Contacts and Phone state. This order is required because SMS permissions are restricted to the default SMS handler on modern Android. If the system dialog is declined, open **Settings → Apps → Default apps → SMS app** and select SMS Guardian, then reopen the app.
 
 If Android still reports that SMS access was denied after SMS Guardian is selected as the default SMS app, remove the older installation, install the newly built APK, and accept the system default-SMS prompt. SMS delivery and sending depend on Android granting the SMS role and on an active SIM/mobile service; they cannot be bypassed by requesting `SEND_SMS` alone.
+
+
+Build fix v1.0.2: removed invalid references to `Manifest.permission.WRITE_SMS`. Android SDK does not expose this as a runtime permission constant; the previous references caused Kotlin compilation to fail. The app no longer requests/checks WRITE_SMS as a runtime permission.

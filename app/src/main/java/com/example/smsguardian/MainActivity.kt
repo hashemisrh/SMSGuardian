@@ -2,7 +2,6 @@ package com.example.smsguardian
 
 import android.Manifest
 import android.app.role.RoleManager
-import android.content.ContentValues
 import android.content.Intent
 import android.net.Uri
 import android.content.pm.PackageManager
@@ -73,8 +72,7 @@ class MainActivity : ComponentActivity() {
             Manifest.permission.READ_SMS,
             Manifest.permission.RECEIVE_SMS,
             Manifest.permission.RECEIVE_MMS,
-            Manifest.permission.RECEIVE_WAP_PUSH,
-            Manifest.permission.WRITE_SMS
+            Manifest.permission.RECEIVE_WAP_PUSH
         )
         val deniedSms = smsPermissions.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
@@ -131,7 +129,6 @@ class MainActivity : ComponentActivity() {
                 Manifest.permission.RECEIVE_SMS,
                 Manifest.permission.READ_SMS,
                 Manifest.permission.SEND_SMS,
-                Manifest.permission.WRITE_SMS,
                 Manifest.permission.RECEIVE_MMS,
                 Manifest.permission.RECEIVE_WAP_PUSH
             ))
@@ -175,18 +172,7 @@ class MainActivity : ComponentActivity() {
             val parts = manager.divideMessage(message)
             if (parts.size > 1) manager.sendMultipartTextMessage(destination.trim(), null, parts, null, null)
             else manager.sendTextMessage(destination.trim(), null, message, null, null)
-            // Android's default SMS provider is writable only for the default SMS handler.
-            if (Telephony.Sms.getDefaultSmsPackage(this) == packageName &&
-                ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_SMS) == PackageManager.PERMISSION_GRANTED) {
-                runCatching {
-                    val values = ContentValues().apply {
-                        put(Telephony.Sms.ADDRESS, destination.trim()); put(Telephony.Sms.BODY, message)
-                        put(Telephony.Sms.DATE, System.currentTimeMillis()); put(Telephony.Sms.READ, 1)
-                        put(Telephony.Sms.TYPE, Telephony.Sms.MESSAGE_TYPE_SENT)
-                    }
-                    contentResolver.insert(Telephony.Sms.Sent.CONTENT_URI, values)
-                }.onFailure { android.util.Log.e("SMSGuardian", "Sent SMS provider insert failed", it) }
-            }
+            // The platform SMS app/provider records sent messages; WRITE_SMS is not a runtime permission.
             android.widget.Toast.makeText(this, "SMS submitted to the mobile network", android.widget.Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             android.util.Log.e("SMSGuardian", "SMS send failed", e)
