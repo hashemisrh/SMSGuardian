@@ -1,6 +1,5 @@
 name: Android APK
 
-
 on:
   push:
     branches: [ "main", "master" ]
@@ -13,8 +12,7 @@ permissions:
 
 concurrency:
   group: android-${{ github.ref }}
-  # Do not cancel an active build when another push/workflow_dispatch starts.
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build:
