@@ -245,7 +245,7 @@ class MainActivity : ComponentActivity() {
                             NavigationBarItem(selected = page == "rules", onClick = { page = "rules" }, icon = { Icon(Icons.Default.FilterAlt, null) }, label = { Text(if (isFa) "فیلترها" else "Filters") })
                             NavigationBarItem(selected = page == "settings", onClick = { page = "settings" }, icon = { Icon(Icons.Default.Settings, null) }, label = { Text(if (isFa) "تنظیمات" else "Settings") })
                             NavigationBarItem(selected = page == "about", onClick = { page = "about" }, icon = { Icon(Icons.Default.Menu, null) }, label = { Text(if (isFa) "درباره ما" else "About") })
-                            NavigationBarItem(selected = page == "deleted", onClick = { page = "deleted" }, icon = { Icon(Icons.Default.Delete, null) }, label = { Text(if (isFa) "حذف‌شده‌ها" else "Deleted") })
+                            NavigationBarItem(selected = page == "deleted", onClick = { page = "deleted" }, icon = { Icon(Icons.Default.DeleteOutline, null) }, label = { Text(if (isFa) "حذف‌شده‌ها" else "Deleted") })
                         }
                     }
                 }
