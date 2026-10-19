@@ -10,6 +10,7 @@ import android.database.Cursor
 import android.os.Build
 import android.os.Bundle
 import android.provider.Telephony
+import android.provider.ContactsContract
 import android.telephony.SmsManager
 import android.telephony.SubscriptionManager
 import androidx.activity.ComponentActivity
@@ -29,6 +30,8 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.FilterAlt
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Contacts
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
@@ -57,7 +60,23 @@ private val Muted = Color(0xFF9AAAC3)
 data class SmsRow(val address: String, val body: String, val date: Long, val type: Int)
 
 class MainActivity : ComponentActivity() {
-    private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
+    private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+        if (result[Manifest.permission.SEND_SMS] == false) {
+            android.widget.Toast.makeText(this, "اجازه ارسال پیامک داده نشد. از تنظیمات برنامه، مجوز SMS را فعال کنید.", android.widget.Toast.LENGTH_LONG).show()
+        }
+    }
+    private var contactCallback: ((String) -> Unit)? = null
+    private val contactPicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val uri = result.data?.data
+        if (result.resultCode == RESULT_OK && uri != null) {
+            runCatching {
+                contentResolver.query(uri, arrayOf(ContactsContract.CommonDataKinds.Phone.NUMBER), null, null, null)?.use { c ->
+                    if (c.moveToFirst()) contactCallback?.invoke(c.getString(0).orEmpty())
+                }
+            }.onFailure { android.util.Log.e("SMSGuardian", "Could not read selected contact", it) }
+        }
+        contactCallback = null
+    }
     private val roleLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (Telephony.Sms.getDefaultSmsPackage(this) != packageName) {
             android.widget.Toast.makeText(this, "SMS role was not granted. Check Android Settings > Apps > Default apps > SMS app.", android.widget.Toast.LENGTH_LONG).show()
@@ -92,6 +111,11 @@ class MainActivity : ComponentActivity() {
 
     fun sendSms(destination: String, message: String, subId: Int?) {
         if (destination.isBlank() || message.isBlank()) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
+            permissionLauncher.launch(arrayOf(Manifest.permission.SEND_SMS))
+            android.widget.Toast.makeText(this, "برای ارسال پیامک، مجوز SEND_SMS را تأیید کنید و دوباره ارسال را بزنید.", android.widget.Toast.LENGTH_LONG).show()
+            return
+        }
         try {
             val manager = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && subId != null && subId >= 0) {
                 getSystemService(SmsManager::class.java).createForSubscriptionId(subId)
@@ -114,7 +138,11 @@ class MainActivity : ComponentActivity() {
             android.widget.Toast.makeText(this, "SMS submitted to the mobile network", android.widget.Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             android.util.Log.e("SMSGuardian", "SMS send failed", e)
-            android.widget.Toast.makeText(this, "SMS send failed: ${e.message ?: "check permissions and SIM"}", android.widget.Toast.LENGTH_LONG).show()
+            val detail = when {
+                e.message?.contains("uid", true) == true || e.message?.contains("permission", true) == true -> "مجوز ارسال پیامک برای برنامه فعال نیست. تنظیمات برنامه > مجوزها > SMS را بررسی کنید."
+                else -> "SMS send failed: ${e.message ?: "check permissions, default SMS app and SIM"}"
+            }
+            android.widget.Toast.makeText(this, detail, android.widget.Toast.LENGTH_LONG).show()
         }
     }
 
@@ -136,16 +164,18 @@ class MainActivity : ComponentActivity() {
             MaterialTheme(colorScheme = darkColorScheme(primary = Cyan, background = Navy, surface = Panel, onBackground = TextWhite, onSurface = TextWhite)) {
                 Surface(Modifier.fillMaxSize(), color = Navy) {
                     Column(Modifier.fillMaxSize().statusBarsPadding().background(Brush.verticalGradient(listOf(Color(0xFF0D2140), Navy)))) {
-                        Header(isFa, page) { language = if (language == "fa") "en" else "fa"; getPreferences(MODE_PRIVATE).edit().putString("language", language).apply() }
+                        Header(isFa, page, { language = if (language == "fa") "en" else "fa"; getPreferences(MODE_PRIVATE).edit().putString("language", language).apply() }, { page = it })
                         when (page) {
                             "rules" -> RulesPage(isFa, refresh) { refresh++ }
                             "settings" -> SettingsPage(isFa, language, { language = it; getPreferences(MODE_PRIVATE).edit().putString("language", it).apply() }, { requestDefaultSmsRole() })
+                            "about" -> AboutPage(isFa)
                             else -> ChatsPage(isFa, refresh, ::getSmsRows, ::sendSms)
                         }
                         NavigationBar(modifier = Modifier.navigationBarsPadding(), containerColor = Color(0xFF0A172A), contentColor = TextWhite) {
                             NavigationBarItem(selected = page == "chats", onClick = { page = "chats" }, icon = { Icon(Icons.Default.Chat, null) }, label = { Text(if (isFa) "گفتگوها" else "Chats") })
                             NavigationBarItem(selected = page == "rules", onClick = { page = "rules" }, icon = { Icon(Icons.Default.FilterAlt, null) }, label = { Text(if (isFa) "فیلترها" else "Filters") })
                             NavigationBarItem(selected = page == "settings", onClick = { page = "settings" }, icon = { Icon(Icons.Default.Settings, null) }, label = { Text(if (isFa) "تنظیمات" else "Settings") })
+                            NavigationBarItem(selected = page == "about", onClick = { page = "about" }, icon = { Icon(Icons.Default.Menu, null) }, label = { Text(if (isFa) "درباره ما" else "About") })
                         }
                     }
                 }
@@ -153,9 +183,17 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    @Composable private fun Header(isFa: Boolean, page: String, toggleLanguage: () -> Unit) {
+    @Composable private fun Header(isFa: Boolean, page: String, toggleLanguage: () -> Unit, navigate: (String) -> Unit) {
+        var menuExpanded by remember { mutableStateOf(false) }
         Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 18.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(44.dp).background(Cyan.copy(alpha = .15f), RoundedCornerShape(15.dp)), contentAlignment = Alignment.Center) { Icon(Icons.Default.Chat, null, tint = Cyan) }
+            Box {
+                IconButton(onClick = { menuExpanded = true }) { Icon(Icons.Default.Menu, contentDescription = if (isFa) "منو" else "Menu", tint = Cyan) }
+                DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+                    listOf("chats" to (if (isFa) "گفتگوها" else "Chats"), "rules" to (if (isFa) "قوانین بلاک" else "Blocking rules"), "settings" to (if (isFa) "تنظیمات" else "Settings"), "about" to (if (isFa) "درباره ما" else "About")).forEach { (target, label) ->
+                        DropdownMenuItem(text = { Text(label) }, onClick = { menuExpanded = false; navigate(target) })
+                    }
+                }
+            }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text("SMS Guardian", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = TextWhite)
@@ -222,7 +260,13 @@ class MainActivity : ComponentActivity() {
                 Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text(if (isFa) "پیامک جدید" else "New message", color = TextWhite, fontWeight = FontWeight.SemiBold)
-                        OutlinedTextField(value = destination, onValueChange = { destination = it }, modifier = Modifier.fillMaxWidth(), label = { Text(if (isFa) "شماره گیرنده" else "Recipient number") }, singleLine = true)
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            OutlinedTextField(value = destination, onValueChange = { destination = it }, modifier = Modifier.weight(1f), label = { Text(if (isFa) "شماره گیرنده" else "Recipient number") }, singleLine = true)
+                            IconButton(onClick = {
+                                contactCallback = { picked -> destination = picked }
+                                contactPicker.launch(Intent(Intent.ACTION_PICK, ContactsContract.CommonDataKinds.Phone.CONTENT_URI))
+                            }) { Icon(Icons.Default.Contacts, contentDescription = if (isFa) "انتخاب از دفترچه تلفن" else "Choose contact", tint = Cyan) }
+                        }
                         OutlinedTextField(value = message, onValueChange = { message = it }, modifier = Modifier.fillMaxWidth(), label = { Text(if (isFa) "متن پیام" else "Message text") }, minLines = 2)
                         if (sims.isNotEmpty()) {
                             Text(if (isFa) "سیم‌کارت ارسال" else "Send using SIM", color = Muted, style = MaterialTheme.typography.labelMedium)
@@ -321,6 +365,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    @Composable private fun AboutPage(isFa: Boolean) {
+        Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Icon(Icons.Default.Chat, contentDescription = null, tint = Cyan, modifier = Modifier.size(42.dp))
+                    Text("SMS Guardian", color = TextWhite, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                    Text(if (isFa) "توسعه‌دهنده: سیدرضا هاشمی" else "Developer: سیدرضا هاشمی", color = TextWhite)
+                    Text("S.Reza Hashemi", color = Muted)
+                    Text("hashemi.srh@gmail.com", color = Cyan, modifier = Modifier.clickable { runCatching { startActivity(Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:hashemi.srh@gmail.com"))) } })
+                }
+            }
+        }
+    }
+
     @Composable private fun SettingsPage(isFa: Boolean, language: String, changeLanguage: (String) -> Unit, requestRole: () -> Unit) {
         val isDefault = Telephony.Sms.getDefaultSmsPackage(this) == packageName
         Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -340,7 +398,7 @@ class MainActivity : ComponentActivity() {
                     Button(onClick = requestRole, modifier = Modifier.fillMaxWidth()) { Text(if (isFa) "انتخاب به‌عنوان پیام‌رسان پیش‌فرض" else "Set as default SMS app") }
                 }
             }
-            Text(if (isFa) "نکته: عملکرد پس‌زمینه به سیاست‌های اندروید و سازنده گوشی بستگی دارد. این نسخه پیامک را مدیریت می‌کند؛ پردازش کامل MMS و نمایش نام مخاطب از دفترچه تلفن در نسخه بعدی قابل افزودن است." else "Note: background behavior depends on Android and device-vendor policies. This starter handles SMS; full MMS handling and contact-name lookup can be added in a later version.", color = Muted, style = MaterialTheme.typography.bodySmall)
+            Text(if (isFa) "برای فیلتر پیامک‌های ورودی، برنامه باید پیام‌رسان پیش‌فرض گوشی باشد." else "To filter incoming messages, this app must be the phone's default SMS app.", color = Muted, style = MaterialTheme.typography.bodySmall)
         }
     }
 }
