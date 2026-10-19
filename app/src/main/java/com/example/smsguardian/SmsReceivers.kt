@@ -4,6 +4,8 @@ import android.content.BroadcastReceiver
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.app.Activity
+import android.telephony.SmsManager
 import android.net.Uri
 import android.provider.Telephony
 import android.telephony.SmsMessage
@@ -46,5 +48,16 @@ class MmsDeliverReceiver : BroadcastReceiver() {
 class SmsSentReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         Log.i("SMSGuardian", "SMS send result: $resultCode")
+        val message = when (resultCode) {
+            Activity.RESULT_OK -> "پیامک به شبکه ارسال شد. این وضعیت به معنی تحویل قطعی به گیرنده نیست."
+            SmsManager.RESULT_ERROR_NO_SERVICE -> "ارسال ناموفق: شبکه تلفن همراه در دسترس نیست."
+            SmsManager.RESULT_ERROR_RADIO_OFF -> "ارسال ناموفق: رادیوی تلفن یا سیم‌کارت خاموش است."
+            SmsManager.RESULT_ERROR_NULL_PDU -> "ارسال ناموفق: اطلاعات پیامک نامعتبر است."
+            SmsManager.RESULT_ERROR_GENERIC_FAILURE -> "ارسال ناموفق: خطای عمومی شبکه/اپراتور یا اعتبار سیم‌کارت."
+            else -> "ارسال پیامک ناموفق بود. کد خطا: $resultCode"
+        }
+        android.os.Handler(context.mainLooper).post {
+            android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_LONG).show()
+        }
     }
 }

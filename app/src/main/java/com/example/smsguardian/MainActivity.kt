@@ -3,6 +3,7 @@ package com.example.smsguardian
 import android.Manifest
 import android.app.role.RoleManager
 import android.content.Intent
+import android.app.PendingIntent
 import android.net.Uri
 import android.content.pm.PackageManager
 import android.database.Cursor
@@ -170,15 +171,28 @@ class MainActivity : ComponentActivity() {
                 SmsManager.getDefault()
             }
             val parts = manager.divideMessage(message)
-            if (parts.size > 1) manager.sendMultipartTextMessage(destination.trim(), null, parts, null, null)
-            else manager.sendTextMessage(destination.trim(), null, message, null, null)
-            // The platform SMS app/provider records sent messages; WRITE_SMS is not a runtime permission.
-            android.widget.Toast.makeText(this, "SMS submitted to the mobile network", android.widget.Toast.LENGTH_SHORT).show()
+            val sentIntents = ArrayList<PendingIntent>(parts.size)
+            parts.indices.forEach { index ->
+                val sentIntent = Intent(this, SmsSentReceiver::class.java).apply {
+                    action = "com.example.smsguardian.SMS_SENT"
+                    putExtra("part_index", index)
+                    putExtra("part_count", parts.size)
+                }
+                sentIntents.add(
+                    PendingIntent.getBroadcast(
+                        this, (System.currentTimeMillis().toInt() + index), sentIntent,
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
+                )
+            }
+            if (parts.size > 1) manager.sendMultipartTextMessage(destination.trim(), null, parts, sentIntents, null)
+            else manager.sendTextMessage(destination.trim(), null, message, sentIntents.first(), null)
+            // The sent callback reports the actual modem/network submission result.
         } catch (e: Exception) {
-            android.util.Log.e("SMSGuardian", "SMS send failed", e)
-            val detail = when {
-                e is SecurityException || e.message?.contains("uid", true) == true || e.message?.contains("permission", true) == true -> "اندروید دسترسی SEND_SMS را رد کرد. بررسی کنید SMS Guardian واقعاً برنامه پیامک پیش‌فرض باشد؛ سپس برنامه را یک‌بار ببندید و دوباره باز کنید."
-                else -> "SMS send failed: ${e.message ?: "check permissions, default SMS app and SIM"}"
+            android.util.Log.e("SMSGuardian", "SMS send failed; default=${isDefaultSmsApp()}; SEND_SMS granted=${ContextCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED}; subscriptionId=$subId", e)
+            val detail = when (e) {
+                is SecurityException -> "خطای امنیتی هنگام ارسال پیامک: ${e.message ?: e.javaClass.simpleName}. پیش‌فرض بودن برنامه=${isDefaultSmsApp()}، مجوز SEND_SMS=${ContextCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED}، سیم‌کارت=$subId."
+                else -> "ارسال پیامک آغاز نشد: ${e.javaClass.simpleName}: ${e.message ?: "خطای نامشخص؛ سیم‌کارت و آنتن را بررسی کنید."}"
             }
             android.widget.Toast.makeText(this, detail, android.widget.Toast.LENGTH_LONG).show()
         }
