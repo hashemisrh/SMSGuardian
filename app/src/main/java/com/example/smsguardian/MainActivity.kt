@@ -2,6 +2,12 @@ package com.example.smsguardian
 
 import android.Manifest
 import android.app.role.RoleManager
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.Notification
+import android.app.PendingIntent
 import android.content.Intent
 import android.app.PendingIntent
 import android.net.Uri
@@ -42,6 +48,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.core.view.WindowCompat
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.LayoutDirection
@@ -216,18 +223,20 @@ class MainActivity : ComponentActivity() {
     @Composable private fun GuardianApp() {
         var language by remember { mutableStateOf(getPreferences(MODE_PRIVATE).getString("language", "fa") ?: "fa") }
         var page by remember { mutableStateOf("chats") }
+        var bgChoice by remember { mutableIntStateOf(getPreferences(MODE_PRIVATE).getInt("bg_choice", 0)) }
+        val appBg = when (bgChoice) { 1 -> Color(0xFF24152F); 2 -> Color(0xFF102A24); else -> Navy }
         var refresh by remember { mutableIntStateOf(0) }
         LaunchedEffect(smsRoleRefreshSignal) { refresh++ }
         val isFa = language == "fa"
         val direction = if (isFa) LayoutDirection.Rtl else LayoutDirection.Ltr
         CompositionLocalProvider(LocalLayoutDirection provides direction) {
-            MaterialTheme(colorScheme = darkColorScheme(primary = Cyan, background = Navy, surface = Panel, onBackground = TextWhite, onSurface = TextWhite)) {
-                Surface(Modifier.fillMaxSize(), color = Navy) {
-                    Column(Modifier.fillMaxSize().statusBarsPadding().background(Brush.verticalGradient(listOf(Color(0xFF0D2140), Navy)))) {
+            MaterialTheme(colorScheme = darkColorScheme(primary = Cyan, background = appBg, surface = Panel, onBackground = TextWhite, onSurface = TextWhite)) {
+                Surface(Modifier.fillMaxSize(), color = appBg) {
+                    Column(Modifier.fillMaxSize().statusBarsPadding().background(Brush.verticalGradient(listOf(appBg.copy(red = (appBg.red + 0.06f).coerceAtMost(1f)), appBg)))) {
                         Header(isFa, page, { language = if (language == "fa") "en" else "fa"; getPreferences(MODE_PRIVATE).edit().putString("language", language).apply() }, { page = it })
                         when (page) {
                             "rules" -> RulesPage(isFa, refresh) { refresh++ }
-                            "settings" -> SettingsPage(isFa, language, { language = it; getPreferences(MODE_PRIVATE).edit().putString("language", it).apply() }, { requestDefaultSmsRole() })
+                            "settings" -> SettingsPage(isFa, language, { language = it; getPreferences(MODE_PRIVATE).edit().putString("language", it).apply() }, { requestDefaultSmsRole() }, bgChoice) { choice -> bgChoice = choice; getPreferences(MODE_PRIVATE).edit().putInt("bg_choice", choice).apply() }
                             "about" -> AboutPage(isFa)
                             else -> ChatsPage(isFa, refresh, ::getSmsRows, ::sendSms)
                         }
@@ -295,15 +304,21 @@ class MainActivity : ComponentActivity() {
                         Icon(Icons.Default.Call, contentDescription = if (isFa) "تماس" else "Call", tint = Cyan)
                     }
                 }
-                LazyColumn(Modifier.weight(1f).fillMaxWidth(), reverseLayout = false, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                val threadListState = androidx.compose.foundation.lazy.rememberLazyListState()
+                LaunchedEffect(currentNumber, thread.size) {
+                    if (thread.isNotEmpty()) threadListState.scrollToItem(thread.lastIndex)
+                }
+                LazyColumn(state = threadListState, modifier = Modifier.weight(1f).fillMaxWidth(), reverseLayout = false, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(thread, key = { "${it.address}-${it.date}-${it.type}" }) { row ->
                         val outgoing = row.type == Telephony.Sms.MESSAGE_TYPE_SENT || row.type == Telephony.Sms.MESSAGE_TYPE_OUTBOX
+                        var messageMenu by remember { mutableStateOf(false) }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = if (outgoing) Arrangement.End else Arrangement.Start) {
-                            Column(Modifier.widthIn(max = 300.dp).background(if (outgoing) Color(0xFF124B59) else Panel, RoundedCornerShape(16.dp)).padding(12.dp)) {
+                            Column(Modifier.widthIn(max = 300.dp).background(if (outgoing) Color(0xFF124B59) else Panel, RoundedCornerShape(16.dp)).combinedClickable(onClick = {}, onLongClick = { messageMenu = true }).padding(12.dp)) {
                                 Text(row.body, color = TextWhite)
                                 Text(SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(row.date)), color = Muted, style = MaterialTheme.typography.labelSmall)
                             }
                         }
+                        if (messageMenu) AlertDialog(onDismissRequest = { messageMenu = false }, title = { Text(if (isFa) "عملیات پیامک" else "Message actions") }, text = { Text(if (isFa) "متن پیام را کپی کنید یا برای ویرایش در کادر نوشتن قرار دهید." else "Copy the message or load its text into the composer to edit.") }, confirmButton = { TextButton(onClick = { (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("SMS", row.body)); messageMenu = false; android.widget.Toast.makeText(this@MainActivity, if (isFa) "متن کپی شد" else "Copied", android.widget.Toast.LENGTH_SHORT).show() }) { Text(if (isFa) "کپی" else "Copy") } }, dismissButton = { Row { TextButton(onClick = { threadMessage = row.body; messageMenu = false }) { Text(if (isFa) "ویرایش متن" else "Edit text") }; TextButton(onClick = { messageMenu = false }) { Text(if (isFa) "بستن" else "Close") } } })
                     }
                 }
                 Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -350,7 +365,7 @@ class MainActivity : ComponentActivity() {
                     items(conversations, key = { "${it.address}-${it.date}" }) { row ->
                         val displayName = lookupContactName(row.address) ?: row.address
                         val initials = initialsFor(displayName)
-                        Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth().clickable { selectedNumber = row.address }) {
+                        Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth().combinedClickable(onClick = { selectedNumber = row.address }, onLongClick = { showConversationActions(row.address, isFa) { localRefresh++; refresh++ } })) {
                             Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Box(Modifier.size(46.dp).background(Brush.linearGradient(listOf(Cyan, Color(0xFF356BCE))), CircleShape), contentAlignment = Alignment.Center) { Text(initials, color = Color.White, fontWeight = FontWeight.Bold) }
                                 Spacer(Modifier.width(12.dp))
@@ -366,6 +381,38 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+
+    private fun showConversationActions(number: String, isFa: Boolean, changed: () -> Unit) {
+        val options = arrayOf(
+            if (isFa) "حذف این گفتگو" else "Delete conversation",
+            if (isFa) "مسدود کردن این شماره" else "Block this number",
+            if (isFa) "مسدود کردن سرشماره" else "Block sender prefix",
+            if (isFa) "لغو" else "Cancel"
+        )
+        android.app.AlertDialog.Builder(this)
+            .setTitle(if (isFa) "مدیریت گفتگو: $number" else "Conversation: $number")
+            .setItems(options) { dialog, which ->
+                when (which) {
+                    0 -> android.app.AlertDialog.Builder(this).setTitle(if (isFa) "حذف گفتگو؟" else "Delete conversation?")
+                        .setMessage(if (isFa) "تمام پیامک‌های این شماره از صندوق پیامک حذف می‌شوند." else "All SMS messages for this number will be deleted from the SMS provider.")
+                        .setNegativeButton(if (isFa) "انصراف" else "Cancel", null)
+                        .setPositiveButton(if (isFa) "حذف" else "Delete") { _, _ ->
+                            runCatching { contentResolver.delete(Telephony.Sms.CONTENT_URI, "address = ?", arrayOf(number)) }
+                                .onSuccess { changed(); android.widget.Toast.makeText(this, if (isFa) "گفتگو حذف شد" else "Conversation deleted", android.widget.Toast.LENGTH_SHORT).show() }
+                                .onFailure { android.widget.Toast.makeText(this, if (isFa) "حذف گفتگو ناموفق بود" else "Could not delete conversation", android.widget.Toast.LENGTH_LONG).show() }
+                        }.show()
+                    1 -> { RuleStore.addBlocked(this, number); changed(); android.widget.Toast.makeText(this, if (isFa) "شماره بلاک شد" else "Number blocked", android.widget.Toast.LENGTH_SHORT).show() }
+                    2 -> {
+                        val prefix = number.filter { it.isDigit() || it == '+' }.take(5)
+                        if (prefix.isNotBlank()) RuleStore.addPrefix(this, prefix)
+                        changed()
+                        android.widget.Toast.makeText(this, if (isFa) "سرشماره $prefix به فهرست بلاک اضافه شد" else "Prefix $prefix blocked", android.widget.Toast.LENGTH_LONG).show()
+                    }
+                }
+                dialog.dismiss()
+            }.show()
     }
 
     private fun lookupContactName(number: String): String? {
@@ -426,22 +473,51 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable private fun AboutPage(isFa: Boolean) {
-        Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Icon(Icons.Default.Chat, contentDescription = null, tint = Cyan, modifier = Modifier.size(42.dp))
+        Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(24.dp), modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.fillMaxWidth().background(Brush.linearGradient(listOf(Color(0xFF173C59), Panel))).padding(22.dp), verticalArrangement = Arrangement.spacedBy(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Box(Modifier.size(76.dp).background(Brush.linearGradient(listOf(Cyan, Color(0xFF356BCE))), CircleShape), contentAlignment = Alignment.Center) { Icon(Icons.Default.Chat, null, tint = Color.White, modifier = Modifier.size(38.dp)) }
                     Text("SMS Guardian", color = TextWhite, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                    Text(if (isFa) "توسعه‌دهنده: سیدرضا هاشمی" else "Developer: سیدرضا هاشمی", color = TextWhite)
-                    Text("S.Reza Hashemi", color = Muted)
+                    Text(if (isFa) "مدیریت هوشمند پیامک‌ها، فیلتر و کنترل گفتگوها" else "Smart SMS management, filtering and conversation control", color = Muted)
+                    AssistChip(onClick = {}, label = { Text(if (isFa) "حریم خصوصی؛ اطلاعات روی دستگاه شما" else "Privacy-minded · on-device rules") }, leadingIcon = { Icon(Icons.Default.Settings, null) })
+                }
+            }
+            Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(if (isFa) "قابلیت‌ها" else "Features", color = Cyan, fontWeight = FontWeight.Bold)
+                    listOf(
+                        if (isFa) "مدیریت گفتگوها و ارسال پیامک" else "Conversation management and SMS sending",
+                        if (isFa) "فیلتر بر اساس کلمات، شماره کامل و سرشماره" else "Filtering by keywords, full numbers and prefixes",
+                        if (isFa) "مدیریت فهرست مسدودها" else "Manage blocked senders",
+                        if (isFa) "تنظیم زبان و ظاهر برنامه" else "Customize language and appearance"
+                    ).forEach { item -> Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.FilterAlt, null, tint = Cyan, modifier = Modifier.size(20.dp)); Spacer(Modifier.width(10.dp)); Text(item, color = TextWhite) } }
+                }
+            }
+            Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(if (isFa) "توسعه‌دهنده" else "Developer", color = Cyan, fontWeight = FontWeight.Bold)
+                    Text("سیدرضا هاشمی · S. Reza Hashemi", color = TextWhite)
                     Text("hashemi.srh@gmail.com", color = Cyan, modifier = Modifier.clickable { runCatching { startActivity(Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:hashemi.srh@gmail.com"))) } })
+                    Text(if (isFa) "برای دریافت و فیلتر پیامک‌های ورودی، برنامه باید به‌عنوان پیام‌رسان پیش‌فرض انتخاب شده باشد و مجوز اعلان‌ها فعال باشد." else "To receive and filter incoming SMS, set this app as the default SMS app and allow notifications.", color = Muted, style = MaterialTheme.typography.bodySmall)
                 }
             }
         }
     }
 
-    @Composable private fun SettingsPage(isFa: Boolean, language: String, changeLanguage: (String) -> Unit, requestRole: () -> Unit) {
+    @Composable private fun SettingsPage(isFa: Boolean, language: String, changeLanguage: (String) -> Unit, requestRole: () -> Unit, bgChoice: Int, changeBackground: (Int) -> Unit) {
         val isDefault = Telephony.Sms.getDefaultSmsPackage(this) == packageName
         Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(if (isFa) "رنگ زمینه برنامه" else "App background color", color = TextWhite, fontWeight = FontWeight.Bold)
+                    listOf((0 to (if (isFa) "آبی تیره" else "Midnight blue")), (1 to (if (isFa) "بنفش" else "Purple")), (2 to (if (isFa) "سبز جنگلی" else "Forest green"))).forEach { (choice, label) ->
+                        Row(Modifier.fillMaxWidth().clickable { changeBackground(choice) }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(selected = bgChoice == choice, onClick = { changeBackground(choice) })
+                            Text(label, color = TextWhite)
+                        }
+                    }
+                }
+            }
             Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(if (isFa) "زبان برنامه" else "App language", color = TextWhite, fontWeight = FontWeight.Bold)

@@ -5,6 +5,14 @@ import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.app.Activity
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.os.Build
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
+import android.content.pm.PackageManager
 import android.telephony.SmsManager
 import android.net.Uri
 import android.provider.Telephony
@@ -34,8 +42,41 @@ class SmsDeliverReceiver : BroadcastReceiver() {
                 put(Telephony.Sms.TYPE, Telephony.Sms.MESSAGE_TYPE_INBOX)
             }
             context.contentResolver.insert(Telephony.Sms.Inbox.CONTENT_URI, values)
+            showSmsNotification(context, sender, body)
         }.onFailure { Log.e("SMSGuardian", "Could not store SMS in provider", it) }
     }
+}
+
+
+private fun showSmsNotification(context: Context, sender: String, body: String) {
+    val channelId = "incoming_sms"
+    val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        val channel = NotificationChannel(channelId, "پیامک‌های جدید", NotificationManager.IMPORTANCE_HIGH).apply {
+            description = "اعلان پیامک‌های دریافتی"
+            enableVibration(true)
+        }
+        manager.createNotificationChannel(channel)
+    }
+    val launchIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)
+    val pending = launchIntent?.let {
+        PendingIntent.getActivity(context, 7001, it, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+    }
+    if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+        Log.w("SMSGuardian", "Notification permission not granted; incoming SMS notification skipped")
+        return
+    }
+    val notification = NotificationCompat.Builder(context, channelId)
+        .setSmallIcon(com.example.smsguardian.R.drawable.ic_sms_guardian)
+        .setContentTitle(sender.ifBlank { "پیامک جدید" })
+        .setContentText(body.ifBlank { "پیامک جدید دریافت شد" })
+        .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+        .setPriority(NotificationCompat.PRIORITY_HIGH)
+        .setAutoCancel(true)
+        .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+        .apply { if (pending != null) setContentIntent(pending) }
+        .build()
+    NotificationManagerCompat.from(context).notify((System.currentTimeMillis() % Int.MAX_VALUE).toInt(), notification)
 }
 
 /** MMS is declared so Android can offer the default SMS role; this starter app does not yet parse/store MMS. */
