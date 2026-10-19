@@ -3,6 +3,7 @@ package com.example.smsguardian
 import android.Manifest
 import android.app.role.RoleManager
 import android.content.ClipData
+import android.content.ContentValues
 import android.content.ClipboardManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -200,6 +201,23 @@ class MainActivity : ComponentActivity() {
             }
             if (parts.size > 1) manager.sendMultipartTextMessage(destination.trim(), null, parts, sentIntents, null)
             else manager.sendTextMessage(destination.trim(), null, message, sentIntents.first(), null)
+
+            // SmsManager transmits the SMS but does not automatically add it to the
+            // system SMS database. As the default SMS app, persist one full outgoing
+            // message so it appears in the conversation and chat list immediately.
+            runCatching {
+                val sentAt = System.currentTimeMillis()
+                val values = ContentValues().apply {
+                    put(Telephony.Sms.ADDRESS, destination.trim())
+                    put(Telephony.Sms.BODY, message)
+                    put(Telephony.Sms.DATE, sentAt)
+                    put(Telephony.Sms.DATE_SENT, sentAt)
+                    put(Telephony.Sms.TYPE, Telephony.Sms.MESSAGE_TYPE_SENT)
+                    put(Telephony.Sms.READ, 1)
+                    put(Telephony.Sms.SEEN, 1)
+                }
+                contentResolver.insert(Telephony.Sms.Sent.CONTENT_URI, values)
+            }.onFailure { android.util.Log.e("SMSGuardian", "SMS sent but could not be saved to Sent folder", it) }
             // The sent callback reports the actual modem/network submission result.
         } catch (e: Exception) {
             android.util.Log.e("SMSGuardian", "SMS send failed; default=${isDefaultSmsApp()}; SEND_SMS granted=${ContextCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED}; subscriptionId=$subId", e)
