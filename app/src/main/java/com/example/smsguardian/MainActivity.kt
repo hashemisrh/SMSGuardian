@@ -60,9 +60,16 @@ private val Muted = Color(0xFF9AAAC3)
 data class SmsRow(val address: String, val body: String, val date: Long, val type: Int)
 
 class MainActivity : ComponentActivity() {
+    private var smsRoleRefreshSignal by mutableIntStateOf(0)
+
+    // SMS permissions are restricted on modern Android. Always request the SMS role first;
+    // asking for READ/RECEIVE/SEND_SMS before the role is granted causes Android to deny access.
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
-        if (result[Manifest.permission.SEND_SMS] == false) {
-            android.widget.Toast.makeText(this, "اجازه ارسال پیامک داده نشد. از تنظیمات برنامه، مجوز SMS را فعال کنید.", android.widget.Toast.LENGTH_LONG).show()
+        if (result[Manifest.permission.READ_CONTACTS] == false) {
+            android.widget.Toast.makeText(this, "برای انتخاب مخاطب، مجوز مخاطبین را فعال کنید.", android.widget.Toast.LENGTH_LONG).show()
+        }
+        if (result[Manifest.permission.SEND_SMS] == false || result[Manifest.permission.READ_SMS] == false || result[Manifest.permission.RECEIVE_SMS] == false) {
+            android.widget.Toast.makeText(this, "دسترسی پیامک فعال نیست. ابتدا SMS Guardian را در تنظیمات گوشی به‌عنوان برنامه پیامک پیش‌فرض انتخاب کنید.", android.widget.Toast.LENGTH_LONG).show()
         }
     }
     private var contactCallback: ((String) -> Unit)? = null
@@ -77,23 +84,39 @@ class MainActivity : ComponentActivity() {
         }
         contactCallback = null
     }
-    private val roleLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        if (Telephony.Sms.getDefaultSmsPackage(this) != packageName) {
-            android.widget.Toast.makeText(this, "SMS role was not granted. Check Android Settings > Apps > Default apps > SMS app.", android.widget.Toast.LENGTH_LONG).show()
+    private val roleLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        if (isDefaultSmsApp()) {
+            requestNonSmsPermissions()
+            smsRoleRefreshSignal++
+        } else {
+            android.widget.Toast.makeText(this, "برای دریافت و مدیریت پیامک‌ها، SMS Guardian را در تنظیمات گوشی به‌عنوان برنامه پیامک پیش‌فرض انتخاب کنید.", android.widget.Toast.LENGTH_LONG).show()
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, true)
-        askRuntimePermissions()
         setContent { GuardianApp() }
+        // Do not trigger Android's SMS permission denial on first launch: role must come first.
+        window.decorView.post {
+            if (isDefaultSmsApp()) requestNonSmsPermissions() else requestDefaultSmsRole()
+        }
     }
 
-    private fun askRuntimePermissions() {
-        val permissions = mutableListOf(Manifest.permission.RECEIVE_SMS, Manifest.permission.READ_SMS, Manifest.permission.SEND_SMS, Manifest.permission.READ_PHONE_STATE, Manifest.permission.READ_CONTACTS)
+    private fun isDefaultSmsApp(): Boolean = Telephony.Sms.getDefaultSmsPackage(this) == packageName
+
+    private fun requestNonSmsPermissions() {
+        val permissions = mutableListOf(Manifest.permission.READ_PHONE_STATE, Manifest.permission.READ_CONTACTS)
         if (Build.VERSION.SDK_INT >= 33) permissions.add(Manifest.permission.POST_NOTIFICATIONS)
-        permissionLauncher.launch(permissions.toTypedArray())
+        // SMS permissions are granted through the default-SMS role on current Android versions.
+        // Only request them explicitly on older versions, and only after the app is the default handler.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            permissions.add(Manifest.permission.RECEIVE_SMS)
+            permissions.add(Manifest.permission.READ_SMS)
+            permissions.add(Manifest.permission.SEND_SMS)
+        }
+        val missing = permissions.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
+        if (missing.isNotEmpty()) permissionLauncher.launch(missing.toTypedArray())
     }
 
     fun requestDefaultSmsRole() {
@@ -111,9 +134,13 @@ class MainActivity : ComponentActivity() {
 
     fun sendSms(destination: String, message: String, subId: Int?) {
         if (destination.isBlank() || message.isBlank()) return
+        if (!isDefaultSmsApp()) {
+            android.widget.Toast.makeText(this, "ابتدا از بخش تنظیمات، SMS Guardian را پیام‌رسان پیش‌فرض کنید؛ سپس دوباره ارسال کنید.", android.widget.Toast.LENGTH_LONG).show()
+            requestDefaultSmsRole()
+            return
+        }
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
-            permissionLauncher.launch(arrayOf(Manifest.permission.SEND_SMS))
-            android.widget.Toast.makeText(this, "برای ارسال پیامک، مجوز SEND_SMS را تأیید کنید و دوباره ارسال را بزنید.", android.widget.Toast.LENGTH_LONG).show()
+            android.widget.Toast.makeText(this, "اندروید هنوز مجوز ارسال پیامک را به برنامه نداده است. برنامه را پیام‌رسان پیش‌فرض کنید و در صورت تداوم خطا، برنامه را حذف و APK جدید را دوباره نصب کنید.", android.widget.Toast.LENGTH_LONG).show()
             return
         }
         try {
@@ -139,7 +166,7 @@ class MainActivity : ComponentActivity() {
         } catch (e: Exception) {
             android.util.Log.e("SMSGuardian", "SMS send failed", e)
             val detail = when {
-                e.message?.contains("uid", true) == true || e.message?.contains("permission", true) == true -> "مجوز ارسال پیامک برای برنامه فعال نیست. تنظیمات برنامه > مجوزها > SMS را بررسی کنید."
+                e is SecurityException || e.message?.contains("uid", true) == true || e.message?.contains("permission", true) == true -> "اندروید دسترسی SEND_SMS را رد کرد. بررسی کنید SMS Guardian واقعاً برنامه پیامک پیش‌فرض باشد؛ سپس برنامه را یک‌بار ببندید و دوباره باز کنید."
                 else -> "SMS send failed: ${e.message ?: "check permissions, default SMS app and SIM"}"
             }
             android.widget.Toast.makeText(this, detail, android.widget.Toast.LENGTH_LONG).show()
@@ -158,6 +185,7 @@ class MainActivity : ComponentActivity() {
         var language by remember { mutableStateOf(getPreferences(MODE_PRIVATE).getString("language", "fa") ?: "fa") }
         var page by remember { mutableStateOf("chats") }
         var refresh by remember { mutableIntStateOf(0) }
+        LaunchedEffect(smsRoleRefreshSignal) { refresh++ }
         val isFa = language == "fa"
         val direction = if (isFa) LayoutDirection.Rtl else LayoutDirection.Ltr
         CompositionLocalProvider(LocalLayoutDirection provides direction) {

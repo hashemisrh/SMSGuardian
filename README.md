@@ -26,3 +26,10 @@ MMS parsing/receiving is not implemented in this version. SMS role availability 
 
 ## Important testing note
 This source archive was updated, but an Android build could not be run in this environment because Gradle is not installed. Use the included GitHub Actions workflow to compile it and download the APK artifact. Confirm permissions and SMS behavior on a physical device with an active SIM; emulator/build success alone cannot verify carrier delivery.
+
+
+## First launch and SMS access (important)
+
+On Android 10 and newer, the app requests the **default SMS app role first**. Accept the Android system dialog and select **SMS Guardian** as the default SMS app. Only after that will the app request unrelated permissions such as Contacts and Phone state. This order is required because SMS permissions are restricted to the default SMS handler on modern Android. If the system dialog is declined, open **Settings → Apps → Default apps → SMS app** and select SMS Guardian, then reopen the app.
+
+If Android still reports that SMS access was denied after SMS Guardian is selected as the default SMS app, remove the older installation, install the newly built APK, and accept the system default-SMS prompt. SMS delivery and sending depend on Android granting the SMS role and on an active SIM/mobile service; they cannot be bypassed by requesting `SEND_SMS` alone.
