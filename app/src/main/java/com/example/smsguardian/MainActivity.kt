@@ -153,14 +153,21 @@ class MainActivity : ComponentActivity() {
 
     fun sendSms(destination: String, message: String, subId: Int?) {
         if (destination.isBlank() || message.isBlank()) return
-        if (!isDefaultSmsApp()) {
-            android.widget.Toast.makeText(this, "برای ارسال پیامک، ابتدا SMS Guardian را در تنظیمات گوشی به‌عنوان برنامه پیامک پیش‌فرض انتخاب کنید.", android.widget.Toast.LENGTH_LONG).show()
-            requestDefaultSmsRole()
-            return
-        }
+        // Do not block sending solely because the default-SMS-role check disagrees with
+        // the system Settings UI. Try the actual send when SEND_SMS is granted and report
+        // the real Android/modem result below.
+        val defaultRoleHeld = isDefaultSmsApp()
+        android.util.Log.i(
+            "SMSGuardian",
+            "Send requested; defaultSmsRole=$defaultRoleHeld; defaultPackage=${Telephony.Sms.getDefaultSmsPackage(this)}; package=$packageName"
+        )
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
-            requestNonSmsPermissions()
-            android.widget.Toast.makeText(this, "مجوز ارسال هنوز از طرف اندروید داده نشده است. پس از انتخاب برنامه پیش‌فرض، مجوزها را تأیید و دوباره ارسال کنید.", android.widget.Toast.LENGTH_LONG).show()
+            android.util.Log.e("SMSGuardian", "SEND_SMS permission is not granted; defaultSmsRole=$defaultRoleHeld")
+            android.widget.Toast.makeText(
+                this,
+                "اندروید مجوز SEND_SMS را به این برنامه نداده است. از اطلاعات برنامه، بخش Permissions، وضعیت SMS را بررسی کنید. وضعیت پیام‌رسان پیش‌فرض: ${if (defaultRoleHeld) "فعال" else "غیرفعال"}.",
+                android.widget.Toast.LENGTH_LONG
+            ).show()
             return
         }
         try {
@@ -191,7 +198,7 @@ class MainActivity : ComponentActivity() {
         } catch (e: Exception) {
             android.util.Log.e("SMSGuardian", "SMS send failed; default=${isDefaultSmsApp()}; SEND_SMS granted=${ContextCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED}; subscriptionId=$subId", e)
             val detail = when (e) {
-                is SecurityException -> "خطای امنیتی هنگام ارسال پیامک: ${e.message ?: e.javaClass.simpleName}. پیش‌فرض بودن برنامه=${isDefaultSmsApp()}، مجوز SEND_SMS=${ContextCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED}، سیم‌کارت=$subId."
+                is SecurityException -> "اندروید ارسال را از نظر امنیتی رد کرد: ${e.message ?: e.javaClass.simpleName}. بررسی نقش پیش‌فرض=${isDefaultSmsApp()}، بسته پیش‌فرض=${Telephony.Sms.getDefaultSmsPackage(this)}, مجوز SEND_SMS=${ContextCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED}، سیم‌کارت=$subId."
                 else -> "ارسال پیامک آغاز نشد: ${e.javaClass.simpleName}: ${e.message ?: "خطای نامشخص؛ سیم‌کارت و آنتن را بررسی کنید."}"
             }
             android.widget.Toast.makeText(this, detail, android.widget.Toast.LENGTH_LONG).show()

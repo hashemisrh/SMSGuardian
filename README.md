@@ -36,3 +36,9 @@ If Android still reports that SMS access was denied after SMS Guardian is select
 
 
 Build fix v1.0.2: removed invalid references to `Manifest.permission.WRITE_SMS`. Android SDK does not expose this as a runtime permission constant; the previous references caused Kotlin compilation to fail. The app no longer requests/checks WRITE_SMS as a runtime permission.
+
+
+## Revision 8.2 - SMS send gate fix
+- Sending is no longer blocked only because `Telephony.Sms.getDefaultSmsPackage()` disagrees with the system Settings UI.
+- The app checks `SEND_SMS` permission, attempts the actual send when granted, and reports the actual Android send result or the specific exception.
+- This source revision must be built in GitHub Actions and tested on the target phone; it is not represented as device-tested.
