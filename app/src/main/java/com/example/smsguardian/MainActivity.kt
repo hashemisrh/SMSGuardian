@@ -68,8 +68,24 @@ class MainActivity : ComponentActivity() {
         if (result[Manifest.permission.READ_CONTACTS] == false) {
             android.widget.Toast.makeText(this, "برای انتخاب مخاطب، مجوز مخاطبین را فعال کنید.", android.widget.Toast.LENGTH_LONG).show()
         }
-        if (result[Manifest.permission.SEND_SMS] == false || result[Manifest.permission.READ_SMS] == false || result[Manifest.permission.RECEIVE_SMS] == false) {
-            android.widget.Toast.makeText(this, "دسترسی پیامک فعال نیست. ابتدا SMS Guardian را در تنظیمات گوشی به‌عنوان برنامه پیامک پیش‌فرض انتخاب کنید.", android.widget.Toast.LENGTH_LONG).show()
+        val smsPermissions = listOf(
+            Manifest.permission.SEND_SMS,
+            Manifest.permission.READ_SMS,
+            Manifest.permission.RECEIVE_SMS,
+            Manifest.permission.RECEIVE_MMS,
+            Manifest.permission.RECEIVE_WAP_PUSH,
+            Manifest.permission.WRITE_SMS
+        )
+        val deniedSms = smsPermissions.filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }
+        if (deniedSms.isNotEmpty()) {
+            android.util.Log.e("SMSGuardian", "SMS permissions still denied: ${deniedSms.joinToString()}; default=${isDefaultSmsApp()}")
+            android.widget.Toast.makeText(
+                this,
+                "دسترسی پیامک داده نشده است. ابتدا SMS Guardian را از تنظیمات برنامه‌های پیش‌فرض به‌عنوان برنامه پیامک انتخاب کنید. اگر انتخاب شده ولی دسترسی‌ها رد می‌شوند، این APK هنوز مجوزهای لازم نقش پیامک را نگرفته است.",
+                android.widget.Toast.LENGTH_LONG
+            ).show()
         }
     }
     private var contactCallback: ((String) -> Unit)? = null
@@ -108,12 +124,17 @@ class MainActivity : ComponentActivity() {
     private fun requestNonSmsPermissions() {
         val permissions = mutableListOf(Manifest.permission.READ_PHONE_STATE, Manifest.permission.READ_CONTACTS)
         if (Build.VERSION.SDK_INT >= 33) permissions.add(Manifest.permission.POST_NOTIFICATIONS)
-        // SMS permissions are granted through the default-SMS role on current Android versions.
-        // Only request them explicitly on older versions, and only after the app is the default handler.
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            permissions.add(Manifest.permission.RECEIVE_SMS)
-            permissions.add(Manifest.permission.READ_SMS)
-            permissions.add(Manifest.permission.SEND_SMS)
+        // Crucial: only ask for SMS permissions AFTER the OS confirms this package is the
+        // default SMS handler. The SMS role dialog alone is not a substitute for checking grants.
+        if (isDefaultSmsApp()) {
+            permissions.addAll(listOf(
+                Manifest.permission.RECEIVE_SMS,
+                Manifest.permission.READ_SMS,
+                Manifest.permission.SEND_SMS,
+                Manifest.permission.WRITE_SMS,
+                Manifest.permission.RECEIVE_MMS,
+                Manifest.permission.RECEIVE_WAP_PUSH
+            ))
         }
         val missing = permissions.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
         if (missing.isNotEmpty()) permissionLauncher.launch(missing.toTypedArray())
@@ -135,12 +156,13 @@ class MainActivity : ComponentActivity() {
     fun sendSms(destination: String, message: String, subId: Int?) {
         if (destination.isBlank() || message.isBlank()) return
         if (!isDefaultSmsApp()) {
-            android.widget.Toast.makeText(this, "ابتدا از بخش تنظیمات، SMS Guardian را پیام‌رسان پیش‌فرض کنید؛ سپس دوباره ارسال کنید.", android.widget.Toast.LENGTH_LONG).show()
+            android.widget.Toast.makeText(this, "برای ارسال پیامک، ابتدا SMS Guardian را در تنظیمات گوشی به‌عنوان برنامه پیامک پیش‌فرض انتخاب کنید.", android.widget.Toast.LENGTH_LONG).show()
             requestDefaultSmsRole()
             return
         }
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
-            android.widget.Toast.makeText(this, "اندروید هنوز مجوز ارسال پیامک را به برنامه نداده است. برنامه را پیام‌رسان پیش‌فرض کنید و در صورت تداوم خطا، برنامه را حذف و APK جدید را دوباره نصب کنید.", android.widget.Toast.LENGTH_LONG).show()
+            requestNonSmsPermissions()
+            android.widget.Toast.makeText(this, "مجوز ارسال هنوز از طرف اندروید داده نشده است. پس از انتخاب برنامه پیش‌فرض، مجوزها را تأیید و دوباره ارسال کنید.", android.widget.Toast.LENGTH_LONG).show()
             return
         }
         try {
@@ -154,13 +176,16 @@ class MainActivity : ComponentActivity() {
             if (parts.size > 1) manager.sendMultipartTextMessage(destination.trim(), null, parts, null, null)
             else manager.sendTextMessage(destination.trim(), null, message, null, null)
             // Android's default SMS provider is writable only for the default SMS handler.
-            if (Telephony.Sms.getDefaultSmsPackage(this) == packageName) {
-                val values = ContentValues().apply {
-                    put(Telephony.Sms.ADDRESS, destination.trim()); put(Telephony.Sms.BODY, message)
-                    put(Telephony.Sms.DATE, System.currentTimeMillis()); put(Telephony.Sms.READ, 1)
-                    put(Telephony.Sms.TYPE, Telephony.Sms.MESSAGE_TYPE_SENT)
-                }
-                contentResolver.insert(Telephony.Sms.Sent.CONTENT_URI, values)
+            if (Telephony.Sms.getDefaultSmsPackage(this) == packageName &&
+                ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_SMS) == PackageManager.PERMISSION_GRANTED) {
+                runCatching {
+                    val values = ContentValues().apply {
+                        put(Telephony.Sms.ADDRESS, destination.trim()); put(Telephony.Sms.BODY, message)
+                        put(Telephony.Sms.DATE, System.currentTimeMillis()); put(Telephony.Sms.READ, 1)
+                        put(Telephony.Sms.TYPE, Telephony.Sms.MESSAGE_TYPE_SENT)
+                    }
+                    contentResolver.insert(Telephony.Sms.Sent.CONTENT_URI, values)
+                }.onFailure { android.util.Log.e("SMSGuardian", "Sent SMS provider insert failed", it) }
             }
             android.widget.Toast.makeText(this, "SMS submitted to the mobile network", android.widget.Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
