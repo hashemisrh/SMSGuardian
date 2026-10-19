@@ -237,6 +237,7 @@ class MainActivity : ComponentActivity() {
                             "rules" -> RulesPage(isFa, refresh) { refresh++ }
                             "settings" -> SettingsPage(isFa, language, { language = it; getPreferences(MODE_PRIVATE).edit().putString("language", it).apply() }, { requestDefaultSmsRole() }, bgChoice) { choice -> bgChoice = choice; getPreferences(MODE_PRIVATE).edit().putInt("bg_choice", choice).apply() }
                             "about" -> AboutPage(isFa)
+                            "deleted" -> DeletedMessagesPage(isFa, refresh) { refresh++ }
                             else -> ChatsPage(isFa, refresh, ::getSmsRows, ::sendSms)
                         }
                         NavigationBar(modifier = Modifier.navigationBarsPadding(), containerColor = Color(0xFF0A172A), contentColor = TextWhite) {
@@ -244,6 +245,7 @@ class MainActivity : ComponentActivity() {
                             NavigationBarItem(selected = page == "rules", onClick = { page = "rules" }, icon = { Icon(Icons.Default.FilterAlt, null) }, label = { Text(if (isFa) "فیلترها" else "Filters") })
                             NavigationBarItem(selected = page == "settings", onClick = { page = "settings" }, icon = { Icon(Icons.Default.Settings, null) }, label = { Text(if (isFa) "تنظیمات" else "Settings") })
                             NavigationBarItem(selected = page == "about", onClick = { page = "about" }, icon = { Icon(Icons.Default.Menu, null) }, label = { Text(if (isFa) "درباره ما" else "About") })
+                            NavigationBarItem(selected = page == "deleted", onClick = { page = "deleted" }, icon = { Icon(Icons.Default.Delete, null) }, label = { Text(if (isFa) "حذف‌شده‌ها" else "Deleted") })
                         }
                     }
                 }
@@ -398,7 +400,11 @@ class MainActivity : ComponentActivity() {
                         .setMessage(if (isFa) "تمام پیامک‌های این شماره از صندوق پیامک حذف می‌شوند." else "All SMS messages for this number will be deleted from the SMS provider.")
                         .setNegativeButton(if (isFa) "انصراف" else "Cancel", null)
                         .setPositiveButton(if (isFa) "حذف" else "Delete") { _, _ ->
-                            runCatching { contentResolver.delete(Telephony.Sms.CONTENT_URI, "address = ?", arrayOf(number)) }
+                            runCatching {
+                                val toArchive = getSmsRows().filter { it.address == number }
+                                archiveDeletedMessages(toArchive)
+                                contentResolver.delete(Telephony.Sms.CONTENT_URI, "address = ?", arrayOf(number))
+                            }
                                 .onSuccess { changed(); android.widget.Toast.makeText(this, if (isFa) "گفتگو حذف شد" else "Conversation deleted", android.widget.Toast.LENGTH_SHORT).show() }
                                 .onFailure { android.widget.Toast.makeText(this, if (isFa) "حذف گفتگو ناموفق بود" else "Could not delete conversation", android.widget.Toast.LENGTH_LONG).show() }
                         }.show()
@@ -416,12 +422,109 @@ class MainActivity : ComponentActivity() {
 
     private fun lookupContactName(number: String): String? {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) return null
+        val candidates = linkedSetOf<String>()
+        candidates += number.trim()
+        val digits = number.filter { it.isDigit() }
+        if (digits.isNotBlank()) {
+            candidates += digits
+            // Try common international/local formatting variants without assuming a country code.
+            if (digits.startsWith("00") && digits.length > 2) candidates += digits.drop(2)
+            if (digits.startsWith("0") && digits.length > 1) candidates += digits.drop(1)
+            candidates += "+$digits"
+        }
         return runCatching {
-            val uri = android.provider.ContactsContract.PhoneLookup.CONTENT_FILTER_URI.buildUpon().appendPath(Uri.encode(number)).build()
-            contentResolver.query(uri, arrayOf(android.provider.ContactsContract.PhoneLookup.DISPLAY_NAME), null, null, null)?.use { c ->
-                if (c.moveToFirst()) c.getString(0) else null
+            for (candidate in candidates) {
+                val uri = ContactsContract.PhoneLookup.CONTENT_FILTER_URI.buildUpon().appendPath(candidate).build()
+                val found = contentResolver.query(uri, arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME), null, null, null)?.use { c ->
+                    if (c.moveToFirst()) c.getString(0)?.takeIf { it.isNotBlank() } else null
+                }
+                if (found != null) return@runCatching found
             }
+            null
         }.getOrNull()
+    }
+
+    private fun archiveDeletedMessages(messages: List<SmsRow>) {
+        if (messages.isEmpty()) return
+        val prefs = getSharedPreferences("deleted_sms_archive", MODE_PRIVATE)
+        val all = runCatching { org.json.JSONArray(prefs.getString("items", "[]") ?: "[]") }.getOrDefault(org.json.JSONArray())
+        val known = mutableSetOf<String>()
+        for (i in 0 until all.length()) {
+            val item = all.optJSONObject(i) ?: continue
+            known += "${item.optString("address")}|${item.optLong("date")}|${item.optString("body")}"
+        }
+        messages.forEach { row ->
+            val key = "${row.address}|${row.date}|${row.body}"
+            if (known.add(key)) all.put(org.json.JSONObject().put("address", row.address).put("body", row.body).put("date", row.date).put("type", row.type))
+        }
+        prefs.edit().putString("items", all.toString()).apply()
+    }
+
+    private fun readDeletedMessages(): List<SmsRow> {
+        val prefs = getSharedPreferences("deleted_sms_archive", MODE_PRIVATE)
+        val all = runCatching { org.json.JSONArray(prefs.getString("items", "[]") ?: "[]") }.getOrDefault(org.json.JSONArray())
+        return buildList {
+            for (i in 0 until all.length()) {
+                val item = all.optJSONObject(i) ?: continue
+                add(SmsRow(item.optString("address"), item.optString("body"), item.optLong("date"), item.optInt("type", Telephony.Sms.MESSAGE_TYPE_INBOX)))
+            }
+        }.sortedByDescending { it.date }
+    }
+
+    private fun restoreDeletedMessage(row: SmsRow): Boolean {
+        if (!isDefaultSmsApp()) return false
+        return runCatching {
+            val values = android.content.ContentValues().apply {
+                put(Telephony.Sms.ADDRESS, row.address)
+                put(Telephony.Sms.BODY, row.body)
+                put(Telephony.Sms.DATE, row.date)
+                put(Telephony.Sms.READ, 1)
+                put(Telephony.Sms.TYPE, if (row.type == Telephony.Sms.MESSAGE_TYPE_SENT) Telephony.Sms.MESSAGE_TYPE_SENT else Telephony.Sms.MESSAGE_TYPE_INBOX)
+            }
+            contentResolver.insert(Telephony.Sms.CONTENT_URI, values) ?: return false
+            removeArchivedMessage(row)
+            true
+        }.getOrDefault(false)
+    }
+
+    private fun removeArchivedMessage(row: SmsRow) {
+        val prefs = getSharedPreferences("deleted_sms_archive", MODE_PRIVATE)
+        val old = runCatching { org.json.JSONArray(prefs.getString("items", "[]") ?: "[]") }.getOrDefault(org.json.JSONArray())
+        val fresh = org.json.JSONArray()
+        for (i in 0 until old.length()) {
+            val item = old.optJSONObject(i) ?: continue
+            if (item.optString("address") == row.address && item.optLong("date") == row.date && item.optString("body") == row.body) continue
+            fresh.put(item)
+        }
+        prefs.edit().putString("items", fresh.toString()).apply()
+    }
+
+    @Composable private fun DeletedMessagesPage(isFa: Boolean, refresh: Int, changed: () -> Unit) {
+        val messages = remember(refresh) { readDeletedMessages() }
+        Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
+            Text(if (isFa) "پیامک‌های حذف‌شده" else "Deleted messages", color = TextWhite, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.padding(vertical = 12.dp))
+            Text(if (isFa) "پیامک‌هایی که از این پس از داخل برنامه حذف شوند، اینجا نگهداری می‌شوند." else "Messages deleted from within the app from now on will be kept here.", color = Muted, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 12.dp))
+            if (messages.isEmpty()) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(if (isFa) "آرشیو پیامک‌های حذف‌شده خالی است." else "The deleted-message archive is empty.", color = Muted) }
+            } else LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(messages, key = { "deleted-${it.address}-${it.date}-${it.body.hashCode()}" }) { row ->
+                    Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text("${lookupContactName(row.address) ?: row.address} · ${SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(row.date))}", color = Cyan, fontWeight = FontWeight.SemiBold)
+                            Text(row.body, color = TextWhite)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                TextButton(onClick = {
+                                    val ok = restoreDeletedMessage(row)
+                                    android.widget.Toast.makeText(this@MainActivity, if (ok) { if (isFa) "پیامک بازیابی شد" else "Message restored" } else { if (isFa) "بازیابی ناموفق بود؛ برنامه باید پیام‌رسان پیش‌فرض باشد." else "Restore failed; the app must be the default SMS app." }, android.widget.Toast.LENGTH_LONG).show()
+                                    changed()
+                                }) { Text(if (isFa) "بازیابی" else "Restore") }
+                                TextButton(onClick = { removeArchivedMessage(row); changed() }) { Text(if (isFa) "حذف از آرشیو" else "Remove from archive") }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private fun initialsFor(name: String): String {
