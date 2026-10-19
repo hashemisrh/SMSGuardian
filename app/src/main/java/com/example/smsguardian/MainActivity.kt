@@ -9,7 +9,6 @@ import android.app.NotificationManager
 import android.app.Notification
 import android.app.PendingIntent
 import android.content.Intent
-import android.app.PendingIntent
 import android.net.Uri
 import android.content.pm.PackageManager
 import android.database.Cursor
@@ -365,7 +364,7 @@ class MainActivity : ComponentActivity() {
                     items(conversations, key = { "${it.address}-${it.date}" }) { row ->
                         val displayName = lookupContactName(row.address) ?: row.address
                         val initials = initialsFor(displayName)
-                        Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth().combinedClickable(onClick = { selectedNumber = row.address }, onLongClick = { showConversationActions(row.address, isFa) { localRefresh++; refresh++ } })) {
+                        Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth().combinedClickable(onClick = { selectedNumber = row.address }, onLongClick = { showConversationActions(row.address, isFa) { localRefresh++ } })) {
                             Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Box(Modifier.size(46.dp).background(Brush.linearGradient(listOf(Cyan, Color(0xFF356BCE))), CircleShape), contentAlignment = Alignment.Center) { Text(initials, color = Color.White, fontWeight = FontWeight.Bold) }
                                 Spacer(Modifier.width(12.dp))
