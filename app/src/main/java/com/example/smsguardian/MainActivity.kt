@@ -369,9 +369,13 @@ class MainActivity : ComponentActivity() {
             kotlinx.coroutines.delay(300)
             appliedChatSearch = chatSearch.trim()
         }
-        val groupedConversations = remember(rows) {
-            rows.groupBy { it.address }.map { (address, messages) ->
-                ConversationPreview(address, messages, lookupContactName(address))
+        var groupedConversations by remember { mutableStateOf(emptyList<ConversationPreview>()) }
+        LaunchedEffect(rows) {
+            // SMS grouping and contact-provider lookups must never run on the UI thread.
+            groupedConversations = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                rows.groupBy { it.address }.map { (address, messages) ->
+                    ConversationPreview(address, messages, lookupContactName(address))
+                }
             }
         }
         var message by remember { mutableStateOf("") }
@@ -381,7 +385,7 @@ class MainActivity : ComponentActivity() {
         var sims by remember { mutableStateOf(emptyList<Pair<Int, String>>()) }
         var localRefresh by remember { mutableIntStateOf(0) }
         LaunchedEffect(refresh, localRefresh) {
-            rows = loadRows()
+            rows = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { loadRows() }
             sims = if (Build.VERSION.SDK_INT >= 22 && ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) runCatching {
                 SubscriptionManager.from(this@MainActivity).activeSubscriptionInfoList.orEmpty().mapIndexed { i, sub ->
                     sub.subscriptionId to (sub.displayName?.toString()?.ifBlank { null } ?: if (isFa) "سیم‌کارت ${i + 1}" else "SIM ${i + 1}")
@@ -513,14 +517,17 @@ class MainActivity : ComponentActivity() {
                 // Group and resolve contact names only when the SMS dataset changes, not on every keystroke.
                 // Search is debounced so typing cannot trigger a full scan for every character.
                 val query = appliedChatSearch
-                val conversations = remember(groupedConversations, query) {
-                    groupedConversations.mapNotNull { conversation ->
-                        val matched = if (query.isBlank()) conversation.messages.firstOrNull()
-                        else if (conversation.address.contains(query, ignoreCase = true) ||
-                            conversation.contactName?.contains(query, ignoreCase = true) == true) conversation.messages.firstOrNull()
-                        else conversation.messages.firstOrNull { it.body.contains(query, ignoreCase = true) }
-                        matched
-                    }.sortedByDescending { it.date }
+                var conversations by remember { mutableStateOf(emptyList<SmsRow>()) }
+                LaunchedEffect(groupedConversations, query) {
+                    conversations = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                        groupedConversations.mapNotNull { conversation ->
+                            val matched = if (query.isBlank()) conversation.messages.maxByOrNull { it.date }
+                            else if (conversation.address.contains(query, ignoreCase = true) ||
+                                conversation.contactName?.contains(query, ignoreCase = true) == true) conversation.messages.maxByOrNull { it.date }
+                            else conversation.messages.asSequence().filter { it.body.contains(query, ignoreCase = true) }.maxByOrNull { it.date }
+                            matched
+                        }.sortedByDescending { it.date }
+                    }
                 }
                 if (conversations.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
                     Text(if (query.isNotBlank()) { if (isFa) "نتیجه‌ای برای این جست‌وجو پیدا نشد." else "No matching messages found." } else { if (isFa) "پیامکی برای نمایش پیدا نشد. برای دریافت پیامک جدید، مجوزها و پیام‌رسان پیش‌فرض را بررسی کنید." else "No messages found. Check permissions and the default SMS role to receive new messages." }, color = Muted)
