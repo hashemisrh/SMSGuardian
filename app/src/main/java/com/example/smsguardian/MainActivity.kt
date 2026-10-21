@@ -25,6 +25,10 @@ import android.telephony.SubscriptionManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.foundation.background
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
@@ -81,13 +85,15 @@ data class SmsRow(val address: String, val body: String, val date: Long, val typ
 class MainActivity : ComponentActivity() {
     private var smsRoleRefreshSignal by mutableIntStateOf(0)
     private var smsObserver: ContentObserver? = null
+    @Volatile private var cachedSmsRows: List<SmsRow>? = null
+    @Volatile private var cachedConversationPreviews: List<ConversationPreview>? = null
 
     override fun onResume() {
         super.onResume()
         if (smsObserver == null) {
             smsObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
-                override fun onChange(selfChange: Boolean) { smsRoleRefreshSignal++ }
-                override fun onChange(selfChange: Boolean, uri: Uri?) { smsRoleRefreshSignal++ }
+                override fun onChange(selfChange: Boolean) { cachedSmsRows = null; cachedConversationPreviews = null; smsRoleRefreshSignal++ }
+                override fun onChange(selfChange: Boolean, uri: Uri?) { cachedSmsRows = null; cachedConversationPreviews = null; smsRoleRefreshSignal++ }
             }
             contentResolver.registerContentObserver(Telephony.Sms.CONTENT_URI, true, smsObserver!!)
             contentResolver.registerContentObserver(Telephony.Mms.CONTENT_URI, true, smsObserver!!)
@@ -294,16 +300,24 @@ class MainActivity : ComponentActivity() {
         getPreferences(MODE_PRIVATE).edit().putInt("launcher_icon_choice", choice.coerceIn(0, aliases.lastIndex)).apply()
     }
 
+    private fun getConversationPreviews(rows: List<SmsRow>): List<ConversationPreview> {
+        cachedConversationPreviews?.let { return it }
+        return rows.groupBy { it.address }.map { (address, messages) ->
+            ConversationPreview(address, messages, lookupContactName(address))
+        }.also { cachedConversationPreviews = it }
+    }
+
     fun getSmsRows(): List<SmsRow> {
+        cachedSmsRows?.let { return it }
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) return emptyList()
         val rows = mutableListOf<SmsRow>()
         val cursor: Cursor? = contentResolver.query(Telephony.Sms.CONTENT_URI, arrayOf(Telephony.Sms.ADDRESS, Telephony.Sms.BODY, Telephony.Sms.DATE, Telephony.Sms.TYPE), null, null, "date DESC")
         cursor?.use { while (it.moveToNext()) rows.add(SmsRow(it.getString(0).orEmpty(), it.getString(1).orEmpty(), it.getLong(2), it.getInt(3))) }
-        return rows
+        return rows.toList().also { cachedSmsRows = it }
     }
 
     @Composable private fun GuardianApp() {
-        var language by remember { mutableStateOf(getPreferences(MODE_PRIVATE).getString("language", "fa") ?: "fa") }
+        var language by remember { mutableStateOf(getPreferences(MODE_PRIVATE).getString("language", "en") ?: "en") }
         var page by remember { mutableStateOf("chats") }
         var bgChoice by remember { mutableIntStateOf(getPreferences(MODE_PRIVATE).getInt("bg_choice", 3)) }
         var launcherIconChoice by remember { mutableIntStateOf(getPreferences(MODE_PRIVATE).getInt("launcher_icon_choice", 0)) }
@@ -379,9 +393,7 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(rows) {
             // SMS grouping and contact-provider lookups must never run on the UI thread.
             groupedConversations = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                rows.groupBy { it.address }.map { (address, messages) ->
-                    ConversationPreview(address, messages, lookupContactName(address))
-                }
+                getConversationPreviews(rows)
             }
         }
         var message by remember { mutableStateOf("") }
@@ -589,13 +601,32 @@ class MainActivity : ComponentActivity() {
                         .setMessage(if (isFa) "تمام پیامک‌های این شماره از صندوق پیامک حذف می‌شوند." else "All SMS messages for this number will be deleted from the SMS provider.")
                         .setNegativeButton(if (isFa) "انصراف" else "Cancel", null)
                         .setPositiveButton(if (isFa) "حذف" else "Delete") { _, _ ->
-                            runCatching {
-                                val toArchive = getSmsRows().filter { it.address == number }
-                                archiveDeletedMessages(toArchive)
-                                contentResolver.delete(Telephony.Sms.CONTENT_URI, "address = ?", arrayOf(number))
+                            // Update the visible list immediately; archive and provider deletion run off the UI thread.
+                            val currentRows = cachedSmsRows ?: emptyList()
+                            val toArchive = currentRows.filter { it.address == number }
+                            cachedSmsRows = currentRows.filterNot { it.address == number }
+                            cachedConversationPreviews = null
+                            changed()
+                            android.widget.Toast.makeText(this, if (isFa) "در حال حذف گفتگو…" else "Deleting conversation…", android.widget.Toast.LENGTH_SHORT).show()
+                            lifecycleScope.launch {
+                                val result = withContext(Dispatchers.IO) {
+                                    runCatching {
+                                        archiveDeletedMessages(toArchive)
+                                        contentResolver.delete(Telephony.Sms.CONTENT_URI, "address = ?", arrayOf(number))
+                                    }
+                                }
+                                result.onSuccess {
+                                    cachedSmsRows = (cachedSmsRows ?: emptyList()).filterNot { it.address == number }
+                                    cachedConversationPreviews = null
+                                    changed()
+                                    android.widget.Toast.makeText(this@MainActivity, if (isFa) "گفتگو حذف شد" else "Conversation deleted", android.widget.Toast.LENGTH_SHORT).show()
+                                }.onFailure {
+                                    cachedSmsRows = null
+                                    cachedConversationPreviews = null
+                                    changed()
+                                    android.widget.Toast.makeText(this@MainActivity, if (isFa) "حذف گفتگو ناموفق بود" else "Could not delete conversation", android.widget.Toast.LENGTH_LONG).show()
+                                }
                             }
-                                .onSuccess { changed(); android.widget.Toast.makeText(this, if (isFa) "گفتگو حذف شد" else "Conversation deleted", android.widget.Toast.LENGTH_SHORT).show() }
-                                .onFailure { android.widget.Toast.makeText(this, if (isFa) "حذف گفتگو ناموفق بود" else "Could not delete conversation", android.widget.Toast.LENGTH_LONG).show() }
                         }.show()
                     1 -> { RuleStore.addBlocked(this, number); changed(); android.widget.Toast.makeText(this, if (isFa) "شماره بلاک شد" else "Number blocked", android.widget.Toast.LENGTH_SHORT).show() }
                     2 -> {
@@ -770,6 +801,7 @@ class MainActivity : ComponentActivity() {
                     Box(Modifier.size(76.dp).background(Brush.linearGradient(listOf(Cyan, Color(0xFF356BCE))), CircleShape), contentAlignment = Alignment.Center) { Icon(Icons.Default.Chat, null, tint = Color.White, modifier = Modifier.size(38.dp)) }
                     Text("SMS Guardian", color = TextWhite, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                     Text(if (isFa) "مدیریت هوشمند پیامک‌ها، فیلتر و کنترل گفتگوها" else "Smart SMS management, filtering and conversation control", color = Muted)
+                    Text("Version ${runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: "1.0.2"}", color = Muted, style = MaterialTheme.typography.labelMedium)
                     AssistChip(onClick = {}, label = { Text(if (isFa) "حریم خصوصی؛ اطلاعات روی دستگاه شما" else "Privacy-minded · on-device rules") }, leadingIcon = { Icon(Icons.Default.Settings, null) })
                 }
             }
