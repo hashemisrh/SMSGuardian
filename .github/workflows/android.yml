@@ -1,6 +1,4 @@
 name: Android APK
-
-
 on:
   push:
     branches: [ "main", "master" ]
