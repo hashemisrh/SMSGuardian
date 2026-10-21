@@ -361,6 +361,7 @@ class MainActivity : ComponentActivity() {
     @Composable private fun ChatsPage(isFa: Boolean, refresh: Int, bgChoice: Int, loadRows: () -> List<SmsRow>, send: (String, String, Int?) -> Unit) {
         var rows by remember { mutableStateOf(emptyList<SmsRow>()) }
         var destination by remember { mutableStateOf("") }
+        var chatSearch by remember { mutableStateOf("") }
         var message by remember { mutableStateOf("") }
         var threadMessage by remember { mutableStateOf("") }
         var selectedNumber by remember { mutableStateOf<String?>(null) }
@@ -436,10 +437,34 @@ class MainActivity : ComponentActivity() {
                         var suggestionsExpanded by remember { mutableStateOf(false) }
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             Column(Modifier.weight(1f)) {
-                                OutlinedTextField(value = destination, onValueChange = { destination = it; val matches = findContactSuggestions(it); suggestions = matches; suggestionsExpanded = it.isNotBlank() && matches.isNotEmpty() }, modifier = Modifier.fillMaxWidth(), label = { Text(if (isFa) "نام یا شماره گیرنده" else "Recipient name or number") }, singleLine = true, trailingIcon = { Icon(Icons.Default.Search, null) })
-                                DropdownMenu(expanded = suggestionsExpanded && suggestions.isNotEmpty(), onDismissRequest = { suggestionsExpanded = false }, modifier = Modifier.heightIn(max = 300.dp)) {
-                                    suggestions.forEach { item ->
-                                        DropdownMenuItem(text = { Column { Text(item.name.ifBlank { item.number }, fontWeight = FontWeight.SemiBold); if (item.name.isNotBlank()) Text(item.number, color = Muted, style = MaterialTheme.typography.labelSmall) } }, onClick = { destination = item.number; suggestionsExpanded = false })
+                                OutlinedTextField(
+                                    value = destination,
+                                    onValueChange = { typed -> destination = typed; suggestions = findContactSuggestions(typed); suggestionsExpanded = typed.isNotBlank() && suggestions.isNotEmpty() },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    label = { Text(if (isFa) "نام یا شماره گیرنده" else "Recipient name or number") },
+                                    singleLine = true,
+                                    trailingIcon = { Icon(Icons.Default.Search, null) }
+                                )
+                                // Keep suggestions in the normal layout below the field, not in a popup
+                                // that can cover the text being typed or steal the field's focus.
+                                if (suggestionsExpanded && suggestions.isNotEmpty()) {
+                                    Card(
+                                        modifier = Modifier.fillMaxWidth().heightIn(max = 220.dp).padding(top = 4.dp),
+                                        colors = CardDefaults.cardColors(containerColor = Panel),
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) {
+                                        LazyColumn(modifier = Modifier.heightIn(max = 220.dp)) {
+                                            items(suggestions.take(8), key = { "${it.number}-${it.name}" }) { item ->
+                                                Column(
+                                                    Modifier.fillMaxWidth().clickable { destination = item.number; suggestionsExpanded = false }
+                                                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                                                ) {
+                                                    Text(item.name.ifBlank { item.number }, color = TextWhite, fontWeight = FontWeight.SemiBold)
+                                                    if (item.name.isNotBlank()) Text(item.number, color = Muted, style = MaterialTheme.typography.labelSmall)
+                                                }
+                                                HorizontalDivider(color = Muted.copy(alpha = .18f))
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -463,10 +488,27 @@ class MainActivity : ComponentActivity() {
                     Text(if (isFa) "گفتگوها" else "Conversations", color = TextWhite, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.weight(1f)); Text("${rows.map { it.address }.distinct().size}", color = Cyan)
                 }
+                OutlinedTextField(
+                    value = chatSearch,
+                    onValueChange = { chatSearch = it },
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                    singleLine = true,
+                    label = { Text(if (isFa) "جست‌وجو در گفتگوها و متن پیام‌ها" else "Search chats and message text") },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                    trailingIcon = { if (chatSearch.isNotEmpty()) TextButton(onClick = { chatSearch = "" }) { Text(if (isFa) "پاک" else "Clear") } }
+                )
                 Spacer(Modifier.height(8.dp))
-                val conversations = rows.groupBy { it.address }.mapNotNull { (_, messages) -> messages.maxByOrNull { it.date } }.sortedByDescending { it.date }
+                val query = chatSearch.trim()
+                val conversations = rows.groupBy { it.address }.mapNotNull { (_, messages) ->
+                    val ordered = messages.sortedByDescending { it.date }
+                    if (query.isBlank()) ordered.firstOrNull()
+                    else ordered.firstOrNull { row ->
+                        row.body.contains(query, ignoreCase = true) || row.address.contains(query, ignoreCase = true) ||
+                            (lookupContactName(row.address)?.contains(query, ignoreCase = true) == true)
+                    }
+                }.sortedByDescending { it.date }
                 if (conversations.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                    Text(if (isFa) "پیامکی برای نمایش پیدا نشد. برای دریافت پیامک جدید، مجوزها و پیام‌رسان پیش‌فرض را بررسی کنید." else "No messages found. Check permissions and the default SMS role to receive new messages.", color = Muted)
+                    Text(if (query.isNotBlank()) { if (isFa) "نتیجه‌ای برای این جست‌وجو پیدا نشد." else "No matching messages found." } else { if (isFa) "پیامکی برای نمایش پیدا نشد. برای دریافت پیامک جدید، مجوزها و پیام‌رسان پیش‌فرض را بررسی کنید." else "No messages found. Check permissions and the default SMS role to receive new messages." }, color = Muted)
                 } else LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(conversations, key = { "${it.address}-${it.date}" }) { row ->
                         val displayName = lookupContactName(row.address) ?: row.address
