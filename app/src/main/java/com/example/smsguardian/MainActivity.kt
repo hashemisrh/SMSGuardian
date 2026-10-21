@@ -26,6 +26,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -302,7 +305,7 @@ class MainActivity : ComponentActivity() {
     @Composable private fun GuardianApp() {
         var language by remember { mutableStateOf(getPreferences(MODE_PRIVATE).getString("language", "fa") ?: "fa") }
         var page by remember { mutableStateOf("chats") }
-        var bgChoice by remember { mutableIntStateOf(getPreferences(MODE_PRIVATE).getInt("bg_choice", 0)) }
+        var bgChoice by remember { mutableIntStateOf(getPreferences(MODE_PRIVATE).getInt("bg_choice", 3)) }
         var launcherIconChoice by remember { mutableIntStateOf(getPreferences(MODE_PRIVATE).getInt("launcher_icon_choice", 0)) }
         val appBg = when (bgChoice) { 1 -> Color(0xFF24152F); 2 -> Color(0xFF102A24); 3 -> Color(0xFFF7F9FC); else -> Navy }
         val lightTheme = bgChoice == 3
@@ -364,6 +367,9 @@ class MainActivity : ComponentActivity() {
         var destination by remember { mutableStateOf("") }
         var recipientNumber by remember { mutableStateOf("") }
         var chatSearch by remember { mutableStateOf("") }
+        var searchExpanded by remember { mutableStateOf(false) }
+        var showComposer by remember { mutableStateOf(false) }
+        var targetMessage by remember { mutableStateOf<SmsRow?>(null) }
         var appliedChatSearch by remember { mutableStateOf("") }
         LaunchedEffect(chatSearch) {
             kotlinx.coroutines.delay(300)
@@ -398,7 +404,7 @@ class MainActivity : ComponentActivity() {
             val thread = rows.filter { it.address.equals(currentNumber, ignoreCase = true) }.sortedBy { it.date }
             Column(Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = { selectedNumber = null; threadMessage = "" }) { Icon(Icons.Default.ArrowBack, contentDescription = if (isFa) "بازگشت" else "Back", tint = Cyan) }
+                    IconButton(onClick = { selectedNumber = null; threadMessage = ""; targetMessage = null }) { Icon(Icons.Default.ArrowBack, contentDescription = if (isFa) "بازگشت" else "Back", tint = Cyan) }
                     Column(Modifier.weight(1f)) {
                         Text(lookupContactName(currentNumber) ?: currentNumber, color = TextWhite, fontWeight = FontWeight.Bold)
                         Text(currentNumber, color = Muted, style = MaterialTheme.typography.labelSmall)
@@ -419,17 +425,22 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 val threadListState = androidx.compose.foundation.lazy.rememberLazyListState()
-                LaunchedEffect(currentNumber, thread.size) {
-                    if (thread.isNotEmpty()) threadListState.scrollToItem(thread.lastIndex)
+                LaunchedEffect(currentNumber, thread.size, targetMessage) {
+                    if (thread.isNotEmpty()) {
+                        val targetIndex = targetMessage?.let { target -> thread.indexOfFirst { it.date == target.date && it.address == target.address && it.body == target.body && it.type == target.type } } ?: -1
+                        if (targetIndex >= 0) threadListState.scrollToItem(targetIndex)
+                        else threadListState.scrollToItem(thread.lastIndex)
+                    }
                 }
                 LazyColumn(state = threadListState, modifier = Modifier.weight(1f).fillMaxWidth(), reverseLayout = false, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(thread, key = { "${it.address}-${it.date}-${it.type}" }) { row ->
                         val outgoing = row.type == Telephony.Sms.MESSAGE_TYPE_SENT || row.type == Telephony.Sms.MESSAGE_TYPE_OUTBOX
                         var messageMenu by remember { mutableStateOf(false) }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = if (outgoing) Arrangement.End else Arrangement.Start) {
-                            Column(Modifier.widthIn(max = 300.dp).background(if (outgoing) { if (bgChoice == 3) Color(0xFFD6F5F2) else Color(0xFF124B59) } else Panel, RoundedCornerShape(16.dp)).combinedClickable(onClick = {}, onLongClick = { messageMenu = true }).padding(12.dp)) {
-                                Text(row.body, color = TextWhite)
-                                Text(SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(row.date)), color = Muted, style = MaterialTheme.typography.labelSmall)
+                            val isTarget = targetMessage?.let { it.date == row.date && it.address == row.address && it.body == row.body && it.type == row.type } == true
+                            Column(Modifier.widthIn(max = 300.dp).background(if (isTarget) Color(0xFFFFE082) else if (outgoing) { if (bgChoice == 3) Color(0xFFD6F5F2) else Color(0xFF124B59) } else Panel, RoundedCornerShape(16.dp)).combinedClickable(onClick = {}, onLongClick = { messageMenu = true }).padding(12.dp)) {
+                                Text(row.body, color = if (isTarget) Color(0xFF172033) else TextWhite)
+                                Text(SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(row.date)), color = if (isTarget) Color(0xFF4B5563) else Muted, style = MaterialTheme.typography.labelSmall)
                             }
                         }
                         if (messageMenu) AlertDialog(onDismissRequest = { messageMenu = false }, title = { Text(if (isFa) "عملیات پیامک" else "Message actions") }, text = { Text(if (isFa) "متن پیام را کپی کنید یا برای ویرایش در کادر نوشتن قرار دهید." else "Copy the message or load its text into the composer to edit.") }, confirmButton = { TextButton(onClick = { (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("SMS", row.body)); messageMenu = false; android.widget.Toast.makeText(this@MainActivity, if (isFa) "متن کپی شد" else "Copied", android.widget.Toast.LENGTH_SHORT).show() }) { Text(if (isFa) "کپی" else "Copy") } }, dismissButton = { Row { TextButton(onClick = { threadMessage = row.body; messageMenu = false }) { Text(if (isFa) "ویرایش متن" else "Edit text") }; TextButton(onClick = { messageMenu = false }) { Text(if (isFa) "بستن" else "Close") } } })
@@ -445,7 +456,19 @@ class MainActivity : ComponentActivity() {
                 }
             }
         } else {
-            Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+            Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
+                Row(Modifier.fillMaxWidth().padding(top = 2.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(if (isFa) "گفتگوها" else "Conversations", color = TextWhite, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.weight(1f))
+                    Text("${rows.map { it.address }.distinct().size}", color = Cyan)
+                    IconButton(onClick = { searchExpanded = !searchExpanded; if (!searchExpanded) chatSearch = "" }) {
+                        Icon(if (searchExpanded) Icons.Default.ArrowBack else Icons.Default.Search, contentDescription = if (isFa) "جست‌وجو در پیامک‌ها" else "Search messages", tint = Cyan)
+                    }
+                    IconButton(onClick = { showComposer = !showComposer }) {
+                        Icon(if (showComposer) Icons.Default.ArrowBack else Icons.Default.Add, contentDescription = if (isFa) "پیام جدید" else "New message", tint = Cyan)
+                    }
+                }
+                AnimatedVisibility(visible = showComposer, enter = expandVertically(), exit = shrinkVertically()) {
                 Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text(if (isFa) "پیامک جدید" else "New message", color = TextWhite, fontWeight = FontWeight.SemiBold)
@@ -499,21 +522,18 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
-                Spacer(Modifier.height(12.dp))
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text(if (isFa) "گفتگوها" else "Conversations", color = TextWhite, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.weight(1f)); Text("${rows.map { it.address }.distinct().size}", color = Cyan)
                 }
-                OutlinedTextField(
-                    value = chatSearch,
-                    onValueChange = { chatSearch = it },
-                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-                    singleLine = true,
-                    label = { Text(if (isFa) "جست‌وجو در گفتگوها و متن پیام‌ها" else "Search chats and message text") },
-                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                    trailingIcon = { if (chatSearch.isNotEmpty()) TextButton(onClick = { chatSearch = "" }) { Text(if (isFa) "پاک" else "Clear") } }
-                )
-                Spacer(Modifier.height(8.dp))
+                AnimatedVisibility(visible = searchExpanded, enter = expandVertically(), exit = shrinkVertically()) {
+                    OutlinedTextField(
+                        value = chatSearch,
+                        onValueChange = { chatSearch = it },
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        singleLine = true,
+                        label = { Text(if (isFa) "جست‌وجو در گفتگوها و متن پیام‌ها" else "Search chats and message text") },
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                        trailingIcon = { if (chatSearch.isNotEmpty()) TextButton(onClick = { chatSearch = "" }) { Text(if (isFa) "پاک" else "Clear") } }
+                    )
+                }
                 // Group and resolve contact names only when the SMS dataset changes, not on every keystroke.
                 // Search is debounced so typing cannot trigger a full scan for every character.
                 val query = appliedChatSearch
@@ -535,7 +555,7 @@ class MainActivity : ComponentActivity() {
                     items(conversations, key = { "${it.address}-${it.date}" }) { row ->
                         val displayName = groupedConversations.firstOrNull { it.address == row.address }?.contactName ?: row.address
                         val initials = initialsFor(displayName)
-                        Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth().combinedClickable(onClick = { selectedNumber = row.address }, onLongClick = { showConversationActions(row.address, isFa) { localRefresh++ } })) {
+                        Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth().combinedClickable(onClick = { selectedNumber = row.address; targetMessage = if (appliedChatSearch.isNotBlank()) row else null; showComposer = false }, onLongClick = { showConversationActions(row.address, isFa) { localRefresh++ } })) {
                             Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Box(Modifier.size(46.dp).background(Brush.linearGradient(listOf(Cyan, Color(0xFF356BCE))), CircleShape), contentAlignment = Alignment.Center) { Text(initials, color = Color.White, fontWeight = FontWeight.Bold) }
                                 Spacer(Modifier.width(12.dp))
