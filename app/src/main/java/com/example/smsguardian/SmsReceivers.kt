@@ -17,7 +17,6 @@ import android.telephony.SmsManager
 import android.net.Uri
 import android.provider.Telephony
 import android.provider.ContactsContract
-import android.content.pm.PackageManager
 import android.telephony.SmsMessage
 import android.util.Log
 

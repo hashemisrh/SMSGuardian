@@ -323,7 +323,7 @@ class MainActivity : ComponentActivity() {
                             "settings" -> SettingsPage(isFa, language, { language = it; getPreferences(MODE_PRIVATE).edit().putString("language", it).apply() }, { requestDefaultSmsRole() }, bgChoice, { choice -> bgChoice = choice; getPreferences(MODE_PRIVATE).edit().putInt("bg_choice", choice).apply() }, launcherIconChoice) { choice -> launcherIconChoice = choice; setLauncherIcon(choice) }
                             "about" -> AboutPage(isFa)
                             "deleted" -> DeletedMessagesPage(isFa, refresh) { refresh++ }
-                            else -> ChatsPage(isFa, refresh, ::getSmsRows, ::sendSms)
+                            else -> ChatsPage(isFa, refresh, bgChoice, ::getSmsRows, ::sendSms)
                         }
                         NavigationBar(modifier = Modifier.navigationBarsPadding(), containerColor = Color(0xFF0A172A), contentColor = TextWhite) {
                             NavigationBarItem(selected = page == "chats", onClick = { page = "chats" }, icon = { Icon(Icons.Default.Chat, null) }, label = { Text(if (isFa) "گفتگوها" else "Chats") })
@@ -358,7 +358,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    @Composable private fun ChatsPage(isFa: Boolean, refresh: Int, loadRows: () -> List<SmsRow>, send: (String, String, Int?) -> Unit) {
+    @Composable private fun ChatsPage(isFa: Boolean, refresh: Int, bgChoice: Int, loadRows: () -> List<SmsRow>, send: (String, String, Int?) -> Unit) {
         var rows by remember { mutableStateOf(emptyList<SmsRow>()) }
         var destination by remember { mutableStateOf("") }
         var message by remember { mutableStateOf("") }
