@@ -42,6 +42,9 @@ import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Contacts
 import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
@@ -63,10 +66,11 @@ import java.util.Date
 import java.util.Locale
 
 private val Navy = Color(0xFF081326)
-private val Panel = Color(0xFF111F35)
-private val Cyan = Color(0xFF12C9C3)
-private val TextWhite = Color(0xFFF1F6FF)
-private val Muted = Color(0xFF9AAAC3)
+private var Panel = Color(0xFF111F35)
+private var Cyan = Color(0xFF12C9C3)
+private var TextWhite = Color(0xFFF1F6FF)
+private var Muted = Color(0xFF9AAAC3)
+private data class ContactSuggestion(val name: String, val number: String)
 
 data class SmsRow(val address: String, val body: String, val date: Long, val type: Int)
 
@@ -253,6 +257,39 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun findContactSuggestions(query: String): List<ContactSuggestion> {
+        if (query.isBlank() || ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) return emptyList()
+        val found = linkedMapOf<String, ContactSuggestion>()
+        runCatching {
+            contentResolver.query(
+                ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                arrayOf(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME, ContactsContract.CommonDataKinds.Phone.NUMBER),
+                "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ? OR ${ContactsContract.CommonDataKinds.Phone.NUMBER} LIKE ?",
+                arrayOf("%$query%", "%$query%"),
+                "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} COLLATE NOCASE ASC"
+            )?.use { c ->
+                val ni = c.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
+                val pi = c.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
+                while (c.moveToNext() && found.size < 8) {
+                    val name = if (ni >= 0) c.getString(ni).orEmpty() else ""
+                    val number = if (pi >= 0) c.getString(pi).orEmpty() else ""
+                    if (number.isNotBlank()) found[number] = ContactSuggestion(name, number)
+                }
+            }
+        }.onFailure { android.util.Log.w("SMSGuardian", "Contact autocomplete query failed", it) }
+        return found.values.toList()
+    }
+
+    private fun setLauncherIcon(choice: Int) {
+        val aliases = listOf(".IconClassic", ".IconOcean", ".IconSunset", ".IconMinimal")
+        val pm = packageManager
+        aliases.forEachIndexed { index, alias ->
+            val component = android.content.ComponentName(this, packageName + alias)
+            pm.setComponentEnabledSetting(component, if (index == choice.coerceIn(0, aliases.lastIndex)) PackageManager.COMPONENT_ENABLED_STATE_ENABLED else PackageManager.COMPONENT_ENABLED_STATE_DISABLED, PackageManager.DONT_KILL_APP)
+        }
+        getPreferences(MODE_PRIVATE).edit().putInt("launcher_icon_choice", choice.coerceIn(0, aliases.lastIndex)).apply()
+    }
+
     fun getSmsRows(): List<SmsRow> {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) return emptyList()
         val rows = mutableListOf<SmsRow>()
@@ -265,19 +302,25 @@ class MainActivity : ComponentActivity() {
         var language by remember { mutableStateOf(getPreferences(MODE_PRIVATE).getString("language", "fa") ?: "fa") }
         var page by remember { mutableStateOf("chats") }
         var bgChoice by remember { mutableIntStateOf(getPreferences(MODE_PRIVATE).getInt("bg_choice", 0)) }
-        val appBg = when (bgChoice) { 1 -> Color(0xFF24152F); 2 -> Color(0xFF102A24); 3 -> Color.White; else -> Navy }
+        var launcherIconChoice by remember { mutableIntStateOf(getPreferences(MODE_PRIVATE).getInt("launcher_icon_choice", 0)) }
+        val appBg = when (bgChoice) { 1 -> Color(0xFF24152F); 2 -> Color(0xFF102A24); 3 -> Color(0xFFF7F9FC); else -> Navy }
+        val lightTheme = bgChoice == 3
+        Panel = if (lightTheme) Color(0xFFFFFFFF) else when (bgChoice) { 1 -> Color(0xFF33213F); 2 -> Color(0xFF18382F); else -> Color(0xFF111F35) }
+        TextWhite = if (lightTheme) Color(0xFF172033) else Color(0xFFF1F6FF)
+        Muted = if (lightTheme) Color(0xFF647084) else Color(0xFF9AAAC3)
+        Cyan = if (lightTheme) Color(0xFF087F8C) else Color(0xFF12C9C3)
         var refresh by remember { mutableIntStateOf(0) }
         LaunchedEffect(smsRoleRefreshSignal) { refresh++ }
         val isFa = language == "fa"
         val direction = if (isFa) LayoutDirection.Rtl else LayoutDirection.Ltr
         CompositionLocalProvider(LocalLayoutDirection provides direction) {
-            MaterialTheme(colorScheme = darkColorScheme(primary = Cyan, background = appBg, surface = Panel, onBackground = TextWhite, onSurface = TextWhite)) {
+            MaterialTheme(colorScheme = if (lightTheme) lightColorScheme(primary = Cyan, secondary = Color(0xFF356BCE), background = appBg, surface = Panel, onBackground = TextWhite, onSurface = TextWhite) else darkColorScheme(primary = Cyan, secondary = Color(0xFF356BCE), background = appBg, surface = Panel, onBackground = TextWhite, onSurface = TextWhite)) {
                 Surface(Modifier.fillMaxSize(), color = appBg) {
                     Column(Modifier.fillMaxSize().statusBarsPadding().background(Brush.verticalGradient(listOf(appBg.copy(red = (appBg.red + 0.06f).coerceAtMost(1f)), appBg)))) {
                         Header(isFa, page, { language = if (language == "fa") "en" else "fa"; getPreferences(MODE_PRIVATE).edit().putString("language", language).apply() }, { page = it })
                         when (page) {
                             "rules" -> RulesPage(isFa, refresh) { refresh++ }
-                            "settings" -> SettingsPage(isFa, language, { language = it; getPreferences(MODE_PRIVATE).edit().putString("language", it).apply() }, { requestDefaultSmsRole() }, bgChoice) { choice -> bgChoice = choice; getPreferences(MODE_PRIVATE).edit().putInt("bg_choice", choice).apply() }
+                            "settings" -> SettingsPage(isFa, language, { language = it; getPreferences(MODE_PRIVATE).edit().putString("language", it).apply() }, { requestDefaultSmsRole() }, bgChoice, { choice -> bgChoice = choice; getPreferences(MODE_PRIVATE).edit().putInt("bg_choice", choice).apply() }, launcherIconChoice) { choice -> launcherIconChoice = choice; setLauncherIcon(choice) }
                             "about" -> AboutPage(isFa)
                             "deleted" -> DeletedMessagesPage(isFa, refresh) { refresh++ }
                             else -> ChatsPage(isFa, refresh, ::getSmsRows, ::sendSms)
@@ -367,7 +410,7 @@ class MainActivity : ComponentActivity() {
                         val outgoing = row.type == Telephony.Sms.MESSAGE_TYPE_SENT || row.type == Telephony.Sms.MESSAGE_TYPE_OUTBOX
                         var messageMenu by remember { mutableStateOf(false) }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = if (outgoing) Arrangement.End else Arrangement.Start) {
-                            Column(Modifier.widthIn(max = 300.dp).background(if (outgoing) Color(0xFF124B59) else Panel, RoundedCornerShape(16.dp)).combinedClickable(onClick = {}, onLongClick = { messageMenu = true }).padding(12.dp)) {
+                            Column(Modifier.widthIn(max = 300.dp).background(if (outgoing) { if (bgChoice == 3) Color(0xFFD6F5F2) else Color(0xFF124B59) } else Panel, RoundedCornerShape(16.dp)).combinedClickable(onClick = {}, onLongClick = { messageMenu = true }).padding(12.dp)) {
                                 Text(row.body, color = TextWhite)
                                 Text(SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(row.date)), color = Muted, style = MaterialTheme.typography.labelSmall)
                             }
@@ -389,10 +432,19 @@ class MainActivity : ComponentActivity() {
                 Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text(if (isFa) "پیامک جدید" else "New message", color = TextWhite, fontWeight = FontWeight.SemiBold)
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            OutlinedTextField(value = destination, onValueChange = { destination = it }, modifier = Modifier.weight(1f), label = { Text(if (isFa) "شماره گیرنده" else "Recipient number") }, singleLine = true)
+                        var suggestions by remember { mutableStateOf(emptyList<ContactSuggestion>()) }
+                        var suggestionsExpanded by remember { mutableStateOf(false) }
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Column(Modifier.weight(1f)) {
+                                OutlinedTextField(value = destination, onValueChange = { destination = it; val matches = findContactSuggestions(it); suggestions = matches; suggestionsExpanded = it.isNotBlank() && matches.isNotEmpty() }, modifier = Modifier.fillMaxWidth(), label = { Text(if (isFa) "نام یا شماره گیرنده" else "Recipient name or number") }, singleLine = true, trailingIcon = { Icon(Icons.Default.Search, null) })
+                                DropdownMenu(expanded = suggestionsExpanded && suggestions.isNotEmpty(), onDismissRequest = { suggestionsExpanded = false }, modifier = Modifier.heightIn(max = 300.dp)) {
+                                    suggestions.forEach { item ->
+                                        DropdownMenuItem(text = { Column { Text(item.name.ifBlank { item.number }, fontWeight = FontWeight.SemiBold); if (item.name.isNotBlank()) Text(item.number, color = Muted, style = MaterialTheme.typography.labelSmall) } }, onClick = { destination = item.number; suggestionsExpanded = false })
+                                    }
+                                }
+                            }
                             IconButton(onClick = {
-                                contactCallback = { picked -> destination = picked }
+                                contactCallback = { picked -> destination = picked; suggestionsExpanded = false }
                                 contactPicker.launch(Intent(Intent.ACTION_PICK, ContactsContract.CommonDataKinds.Phone.CONTENT_URI))
                             }) { Icon(Icons.Default.Contacts, contentDescription = if (isFa) "انتخاب از دفترچه تلفن" else "Choose contact", tint = Cyan) }
                         }
@@ -401,7 +453,7 @@ class MainActivity : ComponentActivity() {
                             Text(if (isFa) "سیم‌کارت ارسال" else "Send using SIM", color = Muted, style = MaterialTheme.typography.labelMedium)
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { sims.forEach { (id, label) -> FilterChip(selected = subId == id, onClick = { subId = id }, label = { Text(label) }) } }
                         }
-                        Button(onClick = { send(destination, message, subId); destination = ""; message = ""; localRefresh++ }, modifier = Modifier.fillMaxWidth(), enabled = destination.isNotBlank() && message.isNotBlank()) {
+                        Button(onClick = { val target = destination.trim(); val textToSend = message; send(target, textToSend, subId); selectedNumber = target; threadMessage = ""; destination = ""; message = ""; suggestionsExpanded = false; localRefresh++ }, modifier = Modifier.fillMaxWidth(), enabled = destination.isNotBlank() && message.isNotBlank()) {
                             Icon(Icons.Default.Send, null); Spacer(Modifier.width(8.dp)); Text(if (isFa) "ارسال پیامک" else "Send SMS")
                         }
                     }
@@ -659,7 +711,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    @Composable private fun SettingsPage(isFa: Boolean, language: String, changeLanguage: (String) -> Unit, requestRole: () -> Unit, bgChoice: Int, changeBackground: (Int) -> Unit) {
+    @Composable private fun SettingsPage(isFa: Boolean, language: String, changeLanguage: (String) -> Unit, requestRole: () -> Unit, bgChoice: Int, changeBackground: (Int) -> Unit, iconChoice: Int, changeIcon: (Int) -> Unit) {
         val isDefault = Telephony.Sms.getDefaultSmsPackage(this) == packageName
         Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
@@ -669,6 +721,20 @@ class MainActivity : ComponentActivity() {
                         Row(Modifier.fillMaxWidth().clickable { changeBackground(choice) }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                             RadioButton(selected = bgChoice == choice, onClick = { changeBackground(choice) })
                             Text(label, color = TextWhite)
+                        }
+                    }
+                }
+            }
+            Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(if (isFa) "آیکون برنامه" else "App icon", color = TextWhite, fontWeight = FontWeight.Bold)
+                    Text(if (isFa) "یکی از چهار آیکون را انتخاب کنید. ممکن است لانچر گوشی کمی زمان برای به‌روزرسانی نیاز داشته باشد." else "Choose one of four launcher icons. Your launcher may take a moment to refresh.", color = Muted, style = MaterialTheme.typography.bodySmall)
+                    listOf(if (isFa) "اصلی" else "Classic", if (isFa) "اقیانوسی" else "Ocean", if (isFa) "غروب" else "Sunset", if (isFa) "مینیمال" else "Minimal").forEachIndexed { index, label ->
+                        Row(Modifier.fillMaxWidth().clickable { changeIcon(index) }.padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(selected = iconChoice == index, onClick = { changeIcon(index) })
+                            Box(Modifier.size(34.dp).background(listOf(Color(0xFF12C9C3), Color(0xFF356BCE), Color(0xFFFF8A5B), Color(0xFF6B7280))[index], CircleShape), contentAlignment = Alignment.Center) { Icon(Icons.Default.Chat, null, tint = Color.White) }
+                            Spacer(Modifier.width(10.dp)); Text(label, color = TextWhite)
+                            if (iconChoice == index) { Spacer(Modifier.weight(1f)); Icon(Icons.Default.Check, null, tint = Cyan) }
                         }
                     }
                 }

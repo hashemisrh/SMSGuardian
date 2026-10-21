@@ -16,6 +16,8 @@ import android.content.pm.PackageManager
 import android.telephony.SmsManager
 import android.net.Uri
 import android.provider.Telephony
+import android.provider.ContactsContract
+import android.content.pm.PackageManager
 import android.telephony.SmsMessage
 import android.util.Log
 
@@ -48,6 +50,17 @@ class SmsDeliverReceiver : BroadcastReceiver() {
 }
 
 
+private fun lookupSenderDisplayName(context: Context, sender: String): String {
+    if (sender.isBlank()) return "پیامک جدید"
+    if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) return sender
+    return runCatching {
+        val uri = ContactsContract.PhoneLookup.CONTENT_FILTER_URI.buildUpon().appendPath(sender).build()
+        context.contentResolver.query(uri, arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0)?.takeIf { it.isNotBlank() } else null
+        } ?: sender
+    }.getOrDefault(sender)
+}
+
 private fun showSmsNotification(context: Context, sender: String, body: String) {
     val channelId = "incoming_sms"
     val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -68,7 +81,7 @@ private fun showSmsNotification(context: Context, sender: String, body: String) 
     }
     val notification = NotificationCompat.Builder(context, channelId)
         .setSmallIcon(com.example.smsguardian.R.drawable.ic_sms_guardian)
-        .setContentTitle(sender.ifBlank { "پیامک جدید" })
+        .setContentTitle(lookupSenderDisplayName(context, sender))
         .setContentText(body.ifBlank { "پیامک جدید دریافت شد" })
         .setStyle(NotificationCompat.BigTextStyle().bigText(body))
         .setPriority(NotificationCompat.PRIORITY_HIGH)
