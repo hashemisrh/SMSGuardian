@@ -95,13 +95,28 @@ class MainActivity : ComponentActivity() {
     @Volatile private var lastSmsRefreshAt = 0L
     private val smsCacheFileName = "sms_rows_cache.json"
     private val smsRecentCacheFileName = "sms_recent_cache.json"
+    private val contactNameCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val smsObserverHandler = Handler(Looper.getMainLooper())
+    private val debouncedSmsRefresh = Runnable {
+        cachedSmsRows = null
+        cachedAllSmsRows = null
+        cachedConversationPreviews = null
+        smsRoleRefreshSignal++
+        requestSmsRowsRefresh(force = true)
+    }
 
     override fun onResume() {
         super.onResume()
         if (smsObserver == null) {
-            smsObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
-                override fun onChange(selfChange: Boolean) { cachedSmsRows = null; cachedAllSmsRows = null; cachedConversationPreviews = null; smsRoleRefreshSignal++; requestSmsRowsRefresh(force = true) }
-                override fun onChange(selfChange: Boolean, uri: Uri?) { cachedSmsRows = null; cachedAllSmsRows = null; cachedConversationPreviews = null; smsRoleRefreshSignal++; requestSmsRowsRefresh(force = true) }
+            smsObserver = object : ContentObserver(smsObserverHandler) {
+                override fun onChange(selfChange: Boolean) {
+                    smsObserverHandler.removeCallbacks(debouncedSmsRefresh)
+                    smsObserverHandler.postDelayed(debouncedSmsRefresh, 450)
+                }
+                override fun onChange(selfChange: Boolean, uri: Uri?) {
+                    smsObserverHandler.removeCallbacks(debouncedSmsRefresh)
+                    smsObserverHandler.postDelayed(debouncedSmsRefresh, 450)
+                }
             }
             contentResolver.registerContentObserver(Telephony.Sms.CONTENT_URI, true, smsObserver!!)
             contentResolver.registerContentObserver(Telephony.Mms.CONTENT_URI, true, smsObserver!!)
@@ -110,6 +125,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onPause() {
+        smsObserverHandler.removeCallbacks(debouncedSmsRefresh)
         smsObserver?.let { contentResolver.unregisterContentObserver(it) }
         smsObserver = null
         super.onPause()
@@ -380,7 +396,7 @@ class MainActivity : ComponentActivity() {
                     writeSmsRowsCache(fresh)
                     writeRecentSmsRowsCache(fresh.take(1500))
                     cachedAllSmsRows = fresh
-                    cachedSmsRows = fresh.take(1500)
+                    cachedSmsRows = fresh
                     cachedConversationPreviews = null
                     lastSmsRefreshAt = System.currentTimeMillis()
                     launch(Dispatchers.Main) { smsRoleRefreshSignal++ }
@@ -744,18 +760,20 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun lookupContactName(number: String): String? {
+        val key = number.trim()
+        if (key.isBlank()) return null
+        contactNameCache[key]?.let { return it.takeUnless { cached -> cached == "\u0000" } }
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) return null
         val candidates = linkedSetOf<String>()
-        candidates += number.trim()
-        val digits = number.filter { it.isDigit() }
+        candidates += key
+        val digits = key.filter { it.isDigit() }
         if (digits.isNotBlank()) {
             candidates += digits
-            // Try common international/local formatting variants without assuming a country code.
             if (digits.startsWith("00") && digits.length > 2) candidates += digits.drop(2)
             if (digits.startsWith("0") && digits.length > 1) candidates += digits.drop(1)
             candidates += "+$digits"
         }
-        return runCatching {
+        val result = runCatching {
             for (candidate in candidates) {
                 val uri = ContactsContract.PhoneLookup.CONTENT_FILTER_URI.buildUpon().appendPath(candidate).build()
                 val found = contentResolver.query(uri, arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME), null, null, null)?.use { c ->
@@ -765,6 +783,9 @@ class MainActivity : ComponentActivity() {
             }
             null
         }.getOrNull()
+        // Cache misses too; repeated list recompositions must not re-query the Contacts provider.
+        contactNameCache[key] = result ?: "\u0000"
+        return result
     }
 
     private fun archiveDeletedMessages(messages: List<SmsRow>) {
