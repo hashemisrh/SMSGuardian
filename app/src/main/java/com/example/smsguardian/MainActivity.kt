@@ -71,6 +71,7 @@ private var Cyan = Color(0xFF12C9C3)
 private var TextWhite = Color(0xFFF1F6FF)
 private var Muted = Color(0xFF9AAAC3)
 private data class ContactSuggestion(val name: String, val number: String)
+private data class ConversationPreview(val address: String, val messages: List<SmsRow>, val contactName: String?)
 
 data class SmsRow(val address: String, val body: String, val date: Long, val type: Int)
 
@@ -361,7 +362,18 @@ class MainActivity : ComponentActivity() {
     @Composable private fun ChatsPage(isFa: Boolean, refresh: Int, bgChoice: Int, loadRows: () -> List<SmsRow>, send: (String, String, Int?) -> Unit) {
         var rows by remember { mutableStateOf(emptyList<SmsRow>()) }
         var destination by remember { mutableStateOf("") }
+        var recipientNumber by remember { mutableStateOf("") }
         var chatSearch by remember { mutableStateOf("") }
+        var appliedChatSearch by remember { mutableStateOf("") }
+        LaunchedEffect(chatSearch) {
+            kotlinx.coroutines.delay(300)
+            appliedChatSearch = chatSearch.trim()
+        }
+        val groupedConversations = remember(rows) {
+            rows.groupBy { it.address }.map { (address, messages) ->
+                ConversationPreview(address, messages, lookupContactName(address))
+            }
+        }
         var message by remember { mutableStateOf("") }
         var threadMessage by remember { mutableStateOf("") }
         var selectedNumber by remember { mutableStateOf<String?>(null) }
@@ -439,7 +451,7 @@ class MainActivity : ComponentActivity() {
                             Column(Modifier.weight(1f)) {
                                 OutlinedTextField(
                                     value = destination,
-                                    onValueChange = { typed -> destination = typed; suggestions = findContactSuggestions(typed); suggestionsExpanded = typed.isNotBlank() && suggestions.isNotEmpty() },
+                                    onValueChange = { typed -> destination = typed; recipientNumber = ""; suggestions = findContactSuggestions(typed); suggestionsExpanded = typed.isNotBlank() && suggestions.isNotEmpty() },
                                     modifier = Modifier.fillMaxWidth(),
                                     label = { Text(if (isFa) "نام یا شماره گیرنده" else "Recipient name or number") },
                                     singleLine = true,
@@ -456,7 +468,7 @@ class MainActivity : ComponentActivity() {
                                         LazyColumn(modifier = Modifier.heightIn(max = 220.dp)) {
                                             items(suggestions.take(8), key = { "${it.number}-${it.name}" }) { item ->
                                                 Column(
-                                                    Modifier.fillMaxWidth().clickable { destination = item.number; suggestionsExpanded = false }
+                                                    Modifier.fillMaxWidth().clickable { destination = item.name.ifBlank { item.number }; recipientNumber = item.number; suggestionsExpanded = false }
                                                         .padding(horizontal = 12.dp, vertical = 10.dp)
                                                 ) {
                                                     Text(item.name.ifBlank { item.number }, color = TextWhite, fontWeight = FontWeight.SemiBold)
@@ -469,7 +481,7 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                             IconButton(onClick = {
-                                contactCallback = { picked -> destination = picked; suggestionsExpanded = false }
+                                contactCallback = { picked -> recipientNumber = picked; destination = lookupContactName(picked) ?: picked; suggestionsExpanded = false }
                                 contactPicker.launch(Intent(Intent.ACTION_PICK, ContactsContract.CommonDataKinds.Phone.CONTENT_URI))
                             }) { Icon(Icons.Default.Contacts, contentDescription = if (isFa) "انتخاب از دفترچه تلفن" else "Choose contact", tint = Cyan) }
                         }
@@ -478,7 +490,7 @@ class MainActivity : ComponentActivity() {
                             Text(if (isFa) "سیم‌کارت ارسال" else "Send using SIM", color = Muted, style = MaterialTheme.typography.labelMedium)
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { sims.forEach { (id, label) -> FilterChip(selected = subId == id, onClick = { subId = id }, label = { Text(label) }) } }
                         }
-                        Button(onClick = { val target = destination.trim(); val textToSend = message; send(target, textToSend, subId); selectedNumber = target; threadMessage = ""; destination = ""; message = ""; suggestionsExpanded = false; localRefresh++ }, modifier = Modifier.fillMaxWidth(), enabled = destination.isNotBlank() && message.isNotBlank()) {
+                        Button(onClick = { val target = recipientNumber.ifBlank { destination.trim() }; val textToSend = message; send(target, textToSend, subId); selectedNumber = target; threadMessage = ""; destination = ""; recipientNumber = ""; message = ""; suggestionsExpanded = false; localRefresh++ }, modifier = Modifier.fillMaxWidth(), enabled = (recipientNumber.isNotBlank() || destination.isNotBlank()) && message.isNotBlank()) {
                             Icon(Icons.Default.Send, null); Spacer(Modifier.width(8.dp)); Text(if (isFa) "ارسال پیامک" else "Send SMS")
                         }
                     }
@@ -498,20 +510,23 @@ class MainActivity : ComponentActivity() {
                     trailingIcon = { if (chatSearch.isNotEmpty()) TextButton(onClick = { chatSearch = "" }) { Text(if (isFa) "پاک" else "Clear") } }
                 )
                 Spacer(Modifier.height(8.dp))
-                val query = chatSearch.trim()
-                val conversations = rows.groupBy { it.address }.mapNotNull { (_, messages) ->
-                    val ordered = messages.sortedByDescending { it.date }
-                    if (query.isBlank()) ordered.firstOrNull()
-                    else ordered.firstOrNull { row ->
-                        row.body.contains(query, ignoreCase = true) || row.address.contains(query, ignoreCase = true) ||
-                            (lookupContactName(row.address)?.contains(query, ignoreCase = true) == true)
-                    }
-                }.sortedByDescending { it.date }
+                // Group and resolve contact names only when the SMS dataset changes, not on every keystroke.
+                // Search is debounced so typing cannot trigger a full scan for every character.
+                val query = appliedChatSearch
+                val conversations = remember(groupedConversations, query) {
+                    groupedConversations.mapNotNull { conversation ->
+                        val matched = if (query.isBlank()) conversation.messages.firstOrNull()
+                        else if (conversation.address.contains(query, ignoreCase = true) ||
+                            conversation.contactName?.contains(query, ignoreCase = true) == true) conversation.messages.firstOrNull()
+                        else conversation.messages.firstOrNull { it.body.contains(query, ignoreCase = true) }
+                        matched
+                    }.sortedByDescending { it.date }
+                }
                 if (conversations.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
                     Text(if (query.isNotBlank()) { if (isFa) "نتیجه‌ای برای این جست‌وجو پیدا نشد." else "No matching messages found." } else { if (isFa) "پیامکی برای نمایش پیدا نشد. برای دریافت پیامک جدید، مجوزها و پیام‌رسان پیش‌فرض را بررسی کنید." else "No messages found. Check permissions and the default SMS role to receive new messages." }, color = Muted)
                 } else LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(conversations, key = { "${it.address}-${it.date}" }) { row ->
-                        val displayName = lookupContactName(row.address) ?: row.address
+                        val displayName = groupedConversations.firstOrNull { it.address == row.address }?.contactName ?: row.address
                         val initials = initialsFor(displayName)
                         Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth().combinedClickable(onClick = { selectedNumber = row.address }, onLongClick = { showConversationActions(row.address, isFa) { localRefresh++ } })) {
                             Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
