@@ -60,7 +60,7 @@
         </receiver>
         <service android:name=".RespondViaMessageService" android:permission="android.permission.SEND_RESPOND_VIA_MESSAGE" android:exported="true"><intent-filter><action android:name="android.intent.action.RESPOND_VIA_MESSAGE" /><category android:name="android.intent.category.DEFAULT" /><data android:scheme="sms" /><data android:scheme="smsto" /></intent-filter></service>
         <receiver android:name=".SmsSentReceiver" android:exported="false">
-            <intent-filter><action android:name="com.example.smsguardian.SMS_SENT" /></intent-filter>
+            <intent-filter><action android:name="com.example.smsguardian.SMS_SENT" /><action android:name="com.example.smsguardian.SMS_DELIVERED" /></intent-filter>
         </receiver>
         <receiver android:name=".SmsForwardingReceiver" android:exported="true" android:permission="android.permission.BROADCAST_SMS">
             <intent-filter android:priority="800"><action android:name="android.provider.Telephony.SMS_RECEIVED" /></intent-filter>

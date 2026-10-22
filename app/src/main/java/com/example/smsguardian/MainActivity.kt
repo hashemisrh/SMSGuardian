@@ -91,6 +91,7 @@ data class SmsRow(val address: String, val body: String, val date: Long, val typ
 class MainActivity : ComponentActivity() {
     private var smsRoleRefreshSignal by mutableIntStateOf(0)
     private var smsObserver: ContentObserver? = null
+    private var deliveryStatusReceiver: android.content.BroadcastReceiver? = null
     @Volatile private var cachedSmsRows: List<SmsRow>? = null
     @Volatile private var cachedAllSmsRows: List<SmsRow>? = null
     @Volatile private var cachedConversationPreviews: List<ConversationPreview>? = null
@@ -124,6 +125,18 @@ class MainActivity : ComponentActivity() {
             contentResolver.registerContentObserver(Telephony.Sms.CONTENT_URI, true, smsObserver!!)
             contentResolver.registerContentObserver(Telephony.Mms.CONTENT_URI, true, smsObserver!!)
         }
+        if (deliveryStatusReceiver == null) {
+            deliveryStatusReceiver = object : android.content.BroadcastReceiver() {
+                override fun onReceive(context: android.content.Context?, intent: Intent?) { smsRoleRefreshSignal++ }
+            }
+            val filter = android.content.IntentFilter("com.example.smsguardian.DELIVERY_STATUS_CHANGED")
+            if (Build.VERSION.SDK_INT >= 33) {
+                registerReceiver(deliveryStatusReceiver, filter, RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("DEPRECATION")
+                registerReceiver(deliveryStatusReceiver, filter)
+            }
+        }
         smsRoleRefreshSignal++
     }
 
@@ -131,6 +144,8 @@ class MainActivity : ComponentActivity() {
         smsObserverHandler.removeCallbacks(debouncedSmsRefresh)
         smsObserver?.let { contentResolver.unregisterContentObserver(it) }
         smsObserver = null
+        deliveryStatusReceiver?.let { runCatching { unregisterReceiver(it) } }
+        deliveryStatusReceiver = null
         super.onPause()
     }
 
@@ -251,21 +266,26 @@ class MainActivity : ComponentActivity() {
             }
             val parts = manager.divideMessage(message)
             val sentIntents = ArrayList<PendingIntent>(parts.size)
+            val deliveryIntents = ArrayList<PendingIntent>(parts.size)
+            val sendKey = SmsDeliveryStatus.key(destination.trim(), message)
             parts.indices.forEach { index ->
                 val sentIntent = Intent(this, SmsSentReceiver::class.java).apply {
                     action = "com.example.smsguardian.SMS_SENT"
                     putExtra("part_index", index)
                     putExtra("part_count", parts.size)
                 }
-                sentIntents.add(
-                    PendingIntent.getBroadcast(
-                        this, (System.currentTimeMillis().toInt() + index), sentIntent,
-                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                    )
-                )
+                val deliveryIntent = Intent(this, SmsSentReceiver::class.java).apply {
+                    action = "com.example.smsguardian.SMS_DELIVERED"
+                    putExtra("delivery_key", sendKey)
+                    putExtra("part_index", index)
+                    putExtra("part_count", parts.size)
+                }
+                val requestBase = (System.currentTimeMillis().toInt() * 31) + index
+                sentIntents.add(PendingIntent.getBroadcast(this, requestBase, sentIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
+                deliveryIntents.add(PendingIntent.getBroadcast(this, requestBase xor 0x5A5A5A5A, deliveryIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
             }
-            if (parts.size > 1) manager.sendMultipartTextMessage(destination.trim(), null, parts, sentIntents, null)
-            else manager.sendTextMessage(destination.trim(), null, message, sentIntents.first(), null)
+            if (parts.size > 1) manager.sendMultipartTextMessage(destination.trim(), null, parts, sentIntents, deliveryIntents)
+            else manager.sendTextMessage(destination.trim(), null, message, sentIntents.first(), deliveryIntents.first())
 
             // SmsManager transmits the SMS but does not automatically add it to the
             // system SMS database. As the default SMS app, persist one full outgoing
@@ -392,16 +412,34 @@ class MainActivity : ComponentActivity() {
     fun loadAllSmsRows(): List<SmsRow> {
         cachedAllSmsRows?.let { return it }
         val saved = loadSmsRowsFromFile(smsCacheFileName)
-        if (saved.isNotEmpty()) { cachedAllSmsRows = saved; return saved }
+        if (saved.isNotEmpty()) {
+            // Merge the newest provider window into the saved history so newly received
+            // and sent SMS appear immediately without rescanning the entire database.
+            val recent = querySmsRows(limit = 2500)
+            val merged = (recent + saved).distinctBy { "${it.address}|${it.date}|${it.type}|${it.body}" }.sortedByDescending { it.date }
+            cachedAllSmsRows = merged
+            if (recent.isNotEmpty()) writeSmsRowsCache(merged)
+            return merged
+        }
         return querySmsRows().also { all -> cachedAllSmsRows = all; if (all.isNotEmpty()) writeSmsRowsCache(all) }
     }
 
     private fun querySmsRows(limit: Int? = null): List<SmsRow> {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) return emptyList()
         val rows = mutableListOf<SmsRow>()
-        val sort = if (limit == null) "date DESC" else "date DESC LIMIT $limit"
-        val cursor: Cursor? = contentResolver.query(Telephony.Sms.CONTENT_URI, arrayOf(Telephony.Sms.ADDRESS, Telephony.Sms.BODY, Telephony.Sms.DATE, Telephony.Sms.TYPE), null, null, sort)
-        cursor?.use { while (it.moveToNext()) rows.add(SmsRow(it.getString(0).orEmpty(), it.getString(1).orEmpty(), it.getLong(2), it.getInt(3))) }
+        // LIMIT in sortOrder is not supported consistently by SMS providers. Query in
+        // descending date order and stop reading the cursor after the requested window.
+        val cursor: Cursor? = contentResolver.query(
+            Telephony.Sms.CONTENT_URI,
+            arrayOf(Telephony.Sms.ADDRESS, Telephony.Sms.BODY, Telephony.Sms.DATE, Telephony.Sms.TYPE),
+            null, null, "date DESC"
+        )
+        cursor?.use {
+            while (it.moveToNext()) {
+                rows.add(SmsRow(it.getString(0).orEmpty(), it.getString(1).orEmpty(), it.getLong(2), it.getInt(3)))
+                if (limit != null && rows.size >= limit) break
+            }
+        }
         return rows
     }
 
@@ -411,18 +449,20 @@ class MainActivity : ComponentActivity() {
         if (!smsRefreshInProgress.compareAndSet(false, true)) return
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                val fresh = querySmsRows()
+                // Refresh only the newest window for the inbox. Scanning and serializing
+                // every historical SMS on every launch/change was the source of long stalls.
+                // Full history remains available on demand for search/thread loading.
+                val fresh = querySmsRows(limit = 2500)
                 if (fresh.isNotEmpty() || ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED) {
-                    // Publish the compact conversation index before serializing the potentially
-                    // huge full history to disk. The UI can refresh as soon as the query ends.
-                    cachedAllSmsRows = fresh
+                    val previousFull = cachedAllSmsRows
+                    cachedAllSmsRows = previousFull?.let { old ->
+                        (fresh + old).distinctBy { "${it.address}|${it.date}|${it.type}|${it.body}" }.sortedByDescending { it.date }
+                    }
                     cachedSmsRows = latestRowsByConversation(fresh)
                     cachedConversationPreviews = null
                     lastSmsRefreshAt = System.currentTimeMillis()
+                    writeRecentSmsRowsCache(fresh)
                     launch(Dispatchers.Main) { smsRoleRefreshSignal++ }
-                    // Disk persistence is secondary; keep it off the critical refresh path.
-                    writeSmsRowsCache(fresh)
-                    writeRecentSmsRowsCache(fresh.take(1500))
                 }
             } catch (e: Exception) {
                 android.util.Log.e("SMSGuardian", "Background SMS refresh failed", e)
@@ -559,7 +599,13 @@ class MainActivity : ComponentActivity() {
         val currentNumber = selectedNumber
         if (currentNumber != null) {
             val threadSource = cachedAllSmsRows ?: rows
-            val thread = threadSource.filter { it.address.equals(currentNumber, ignoreCase = true) }.sortedBy { it.date }
+            var loadedThreadRows by remember(currentNumber) { mutableStateOf<List<SmsRow>?>(null) }
+            LaunchedEffect(currentNumber) {
+                loadedThreadRows = threadSource.filter { it.address.equals(currentNumber, ignoreCase = true) }.sortedBy { it.date }
+                val fullHistory = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { loadAllSmsRows() }
+                loadedThreadRows = fullHistory.filter { it.address.equals(currentNumber, ignoreCase = true) }.sortedBy { it.date }
+            }
+            val thread = loadedThreadRows ?: threadSource.filter { it.address.equals(currentNumber, ignoreCase = true) }.sortedBy { it.date }
             Column(Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = { selectedNumber = null; threadMessage = ""; targetMessage = null }) { Icon(Icons.Default.ArrowBack, contentDescription = if (isFa) "بازگشت" else "Back", tint = Cyan) }
@@ -598,7 +644,13 @@ class MainActivity : ComponentActivity() {
                             val isTarget = targetMessage?.let { it.date == row.date && it.address == row.address && it.body == row.body && it.type == row.type } == true
                             Column(Modifier.widthIn(max = 300.dp).background(if (isTarget) Color(0xFFFFE082) else if (outgoing) { if (bgChoice == 3) Color(0xFFD6F5F2) else Color(0xFF124B59) } else Panel, RoundedCornerShape(16.dp)).combinedClickable(onClick = {}, onLongClick = { messageMenu = true }).padding(12.dp)) {
                                 Text(row.body, color = if (isTarget) Color(0xFF172033) else TextWhite)
-                                Text(SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(row.date)), color = if (isTarget) Color(0xFF4B5563) else Muted, style = MaterialTheme.typography.labelSmall)
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                                    Text(SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(row.date)), color = if (isTarget) Color(0xFF4B5563) else Muted, style = MaterialTheme.typography.labelSmall)
+                                    if (outgoing) {
+                                        val delivered = SmsDeliveryStatus.isDelivered(this@MainActivity, SmsDeliveryStatus.key(row.address, row.body))
+                                        Text(if (delivered) "✓✓" else "✓", color = if (delivered) Color(0xFF1687D9) else Muted, style = MaterialTheme.typography.labelSmall)
+                                    }
+                                }
                             }
                         }
                         if (messageMenu) AlertDialog(onDismissRequest = { messageMenu = false }, title = { Text(if (isFa) "عملیات پیامک" else "Message actions") }, text = { Text(if (isFa) "پیام را کپی کنید، ویرایش کنید یا با انتخاب مخاطب از دفترچه تلفن فوروارد کنید." else "Copy, edit, or forward this message by choosing a contact from your phonebook.") }, confirmButton = { TextButton(onClick = { (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("SMS", row.body)); messageMenu = false; android.widget.Toast.makeText(this@MainActivity, if (isFa) "متن کپی شد" else "Copied", android.widget.Toast.LENGTH_SHORT).show() }) { Text(if (isFa) "کپی" else "Copy") } }, dismissButton = { Row { TextButton(onClick = { contactCallback = { picked -> sendSms(picked, row.body, null); localRefresh++; android.widget.Toast.makeText(this@MainActivity, if (isFa) "پیامک برای ارسال به مخاطب انتخاب‌شده ثبت شد" else "Message queued for the selected contact", android.widget.Toast.LENGTH_SHORT).show() }; messageMenu = false; contactPicker.launch(Intent(Intent.ACTION_PICK, ContactsContract.CommonDataKinds.Phone.CONTENT_URI)) }) { Icon(Icons.Default.Forward, null); Text(if (isFa) "فوروارد" else "Forward") }; TextButton(onClick = { threadMessage = row.body; messageMenu = false }) { Text(if (isFa) "ویرایش متن" else "Edit text") }; TextButton(onClick = { messageMenu = false }) { Text(if (isFa) "بستن" else "Close") } } })

@@ -98,19 +98,39 @@ class MmsDeliverReceiver : BroadcastReceiver() {
     }
 }
 
+object SmsDeliveryStatus {
+    private const val PREFS = "sms_delivery_status"
+    fun key(address: String, body: String): String = (address.filter { it.isDigit() || it == '+' } + "|" + body).hashCode().toString()
+    fun isDelivered(context: android.content.Context, key: String): Boolean =
+        context.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE).getBoolean(key, false)
+    fun markDelivered(context: android.content.Context, key: String) {
+        context.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE).edit().putBoolean(key, true).apply()
+    }
+}
+
 class SmsSentReceiver : BroadcastReceiver() {
-    override fun onReceive(context: Context, intent: Intent) {
+    override fun onReceive(context: android.content.Context, intent: Intent) {
+        if (intent.action == "com.example.smsguardian.SMS_DELIVERED") {
+            if (resultCode == Activity.RESULT_OK) {
+                intent.getStringExtra("delivery_key")?.let { SmsDeliveryStatus.markDelivered(context, it) }
+                // Notify an open activity so its checkmark changes from one to two.
+                context.sendBroadcast(Intent("com.example.smsguardian.DELIVERY_STATUS_CHANGED").setPackage(context.packageName))
+            }
+            return
+        }
         Log.i("SMSGuardian", "SMS send result: $resultCode")
-        val message = when (resultCode) {
-            Activity.RESULT_OK -> "پیامک به شبکه ارسال شد. این وضعیت به معنی تحویل قطعی به گیرنده نیست."
-            SmsManager.RESULT_ERROR_NO_SERVICE -> "ارسال ناموفق: شبکه تلفن همراه در دسترس نیست."
-            SmsManager.RESULT_ERROR_RADIO_OFF -> "ارسال ناموفق: رادیوی تلفن یا سیم‌کارت خاموش است."
-            SmsManager.RESULT_ERROR_NULL_PDU -> "ارسال ناموفق: اطلاعات پیامک نامعتبر است."
-            SmsManager.RESULT_ERROR_GENERIC_FAILURE -> "ارسال ناموفق: خطای عمومی شبکه/اپراتور یا اعتبار سیم‌کارت."
-            else -> "ارسال پیامک ناموفق بود. کد خطا: $resultCode"
+        if (resultCode != Activity.RESULT_OK) {
+            val message = when (resultCode) {
+                SmsManager.RESULT_ERROR_NO_SERVICE -> "ارسال ناموفق: شبکه تلفن همراه در دسترس نیست."
+                SmsManager.RESULT_ERROR_RADIO_OFF -> "ارسال ناموفق: رادیوی تلفن یا سیم‌کارت خاموش است."
+                SmsManager.RESULT_ERROR_NULL_PDU -> "ارسال ناموفق: اطلاعات پیامک نامعتبر است."
+                SmsManager.RESULT_ERROR_GENERIC_FAILURE -> "ارسال ناموفق: خطای عمومی شبکه/اپراتور یا اعتبار سیم‌کارت."
+                else -> "ارسال پیامک ناموفق بود. کد خطا: $resultCode"
+            }
+            android.os.Handler(context.mainLooper).post {
+                android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_LONG).show()
+            }
         }
-        android.os.Handler(context.mainLooper).post {
-            android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_LONG).show()
-        }
+        // Successful sends are indicated by one checkmark in the chat instead of a noisy toast.
     }
 }
