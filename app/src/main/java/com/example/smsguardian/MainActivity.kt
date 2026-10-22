@@ -45,6 +45,7 @@ import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.FilterAlt
+import androidx.compose.material.icons.filled.Forward
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Contacts
@@ -600,7 +601,7 @@ class MainActivity : ComponentActivity() {
                                 Text(SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(row.date)), color = if (isTarget) Color(0xFF4B5563) else Muted, style = MaterialTheme.typography.labelSmall)
                             }
                         }
-                        if (messageMenu) AlertDialog(onDismissRequest = { messageMenu = false }, title = { Text(if (isFa) "عملیات پیامک" else "Message actions") }, text = { Text(if (isFa) "متن پیام را کپی کنید یا برای ویرایش در کادر نوشتن قرار دهید." else "Copy the message or load its text into the composer to edit.") }, confirmButton = { TextButton(onClick = { (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("SMS", row.body)); messageMenu = false; android.widget.Toast.makeText(this@MainActivity, if (isFa) "متن کپی شد" else "Copied", android.widget.Toast.LENGTH_SHORT).show() }) { Text(if (isFa) "کپی" else "Copy") } }, dismissButton = { Row { TextButton(onClick = { threadMessage = row.body; messageMenu = false }) { Text(if (isFa) "ویرایش متن" else "Edit text") }; TextButton(onClick = { messageMenu = false }) { Text(if (isFa) "بستن" else "Close") } } })
+                        if (messageMenu) AlertDialog(onDismissRequest = { messageMenu = false }, title = { Text(if (isFa) "عملیات پیامک" else "Message actions") }, text = { Text(if (isFa) "پیام را کپی کنید، ویرایش کنید یا با انتخاب مخاطب از دفترچه تلفن فوروارد کنید." else "Copy, edit, or forward this message by choosing a contact from your phonebook.") }, confirmButton = { TextButton(onClick = { (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("SMS", row.body)); messageMenu = false; android.widget.Toast.makeText(this@MainActivity, if (isFa) "متن کپی شد" else "Copied", android.widget.Toast.LENGTH_SHORT).show() }) { Text(if (isFa) "کپی" else "Copy") } }, dismissButton = { Row { TextButton(onClick = { contactCallback = { picked -> sendSms(picked, row.body, null); localRefresh++; android.widget.Toast.makeText(this@MainActivity, if (isFa) "پیامک برای ارسال به مخاطب انتخاب‌شده ثبت شد" else "Message queued for the selected contact", android.widget.Toast.LENGTH_SHORT).show() }; messageMenu = false; contactPicker.launch(Intent(Intent.ACTION_PICK, ContactsContract.CommonDataKinds.Phone.CONTENT_URI)) }) { Icon(Icons.Default.Forward, null); Text(if (isFa) "فوروارد" else "Forward") }; TextButton(onClick = { threadMessage = row.body; messageMenu = false }) { Text(if (isFa) "ویرایش متن" else "Edit text") }; TextButton(onClick = { messageMenu = false }) { Text(if (isFa) "بستن" else "Close") } } })
                     }
                 }
                 Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -713,9 +714,13 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
+                val conversationListState = androidx.compose.foundation.lazy.rememberLazyListState()
+                LaunchedEffect(conversations.firstOrNull()?.date, conversations.firstOrNull()?.address, query) {
+                    if (conversations.isNotEmpty() && query.isBlank()) conversationListState.scrollToItem(0)
+                }
                 if (conversations.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
                     Text(if (query.isNotBlank()) { if (isFa) "نتیجه‌ای برای این جست‌وجو پیدا نشد." else "No matching messages found." } else { if (isFa) "پیامکی برای نمایش پیدا نشد. برای دریافت پیامک جدید، مجوزها و پیام‌رسان پیش‌فرض را بررسی کنید." else "No messages found. Check permissions and the default SMS role to receive new messages." }, color = Muted)
-                } else LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                } else LazyColumn(state = conversationListState, modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(conversations, key = { "${it.address}-${it.date}" }) { row ->
                         val displayName = groupedConversations.firstOrNull { it.address == row.address }?.contactName ?: row.address
                         val initials = initialsFor(displayName)
@@ -966,14 +971,17 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable private fun AboutPage(isFa: Boolean) {
-        Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        val lightAbout = getPreferences(MODE_PRIVATE).getInt("bg_choice", 3) == 3
+        val aboutCardText = if (lightAbout) Color(0xFF172033) else TextWhite
+        val aboutMuted = if (lightAbout) Color(0xFF596579) else Muted
+        Column(Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(24.dp), modifier = Modifier.fillMaxWidth()) {
-                Column(Modifier.fillMaxWidth().background(Brush.linearGradient(listOf(Color(0xFF173C59), Panel))).padding(22.dp), verticalArrangement = Arrangement.spacedBy(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(Modifier.fillMaxWidth().background(Brush.linearGradient(listOf(Color(0xFF173C59), Color(0xFF10283F)))).padding(22.dp), verticalArrangement = Arrangement.spacedBy(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Box(Modifier.size(76.dp).background(Brush.linearGradient(listOf(Cyan, Color(0xFF356BCE))), CircleShape), contentAlignment = Alignment.Center) { Icon(Icons.Default.Chat, null, tint = Color.White, modifier = Modifier.size(38.dp)) }
-                    Text("SMS Guardian", color = TextWhite, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                    Text(if (isFa) "مدیریت هوشمند پیامک‌ها، فیلتر و کنترل گفتگوها" else "Smart SMS management, filtering and conversation control", color = Muted)
-                    Text("Version ${runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: "1.0.2"}", color = Muted, style = MaterialTheme.typography.labelMedium)
-                    AssistChip(onClick = {}, label = { Text(if (isFa) "حریم خصوصی؛ اطلاعات روی دستگاه شما" else "Privacy-minded · on-device rules") }, leadingIcon = { Icon(Icons.Default.Settings, null) })
+                    Text("SMS Guardian", color = Color.White, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                    Text(if (isFa) "مدیریت هوشمند پیامک‌ها، فیلتر و کنترل گفتگوها" else "Smart SMS management, filtering and conversation control", color = Color.White.copy(alpha = 0.88f))
+                    Text("Version ${runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: "1.0.2"}", color = Color.White.copy(alpha = 0.85f), style = MaterialTheme.typography.labelMedium)
+                    AssistChip(onClick = {}, colors = AssistChipDefaults.assistChipColors(containerColor = Color.White.copy(alpha = 0.14f), labelColor = Color.White, leadingIconContentColor = Color.White), label = { Text(if (isFa) "حریم خصوصی؛ اطلاعات روی دستگاه شما" else "Privacy-minded · on-device rules") }, leadingIcon = { Icon(Icons.Default.Settings, null) })
                 }
             }
             Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
@@ -984,15 +992,15 @@ class MainActivity : ComponentActivity() {
                         if (isFa) "فیلتر بر اساس کلمات، شماره کامل و سرشماره" else "Filtering by keywords, full numbers and prefixes",
                         if (isFa) "مدیریت فهرست مسدودها" else "Manage blocked senders",
                         if (isFa) "تنظیم زبان و ظاهر برنامه" else "Customize language and appearance"
-                    ).forEach { item -> Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.FilterAlt, null, tint = Cyan, modifier = Modifier.size(20.dp)); Spacer(Modifier.width(10.dp)); Text(item, color = TextWhite) } }
+                    ).forEach { item -> Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.FilterAlt, null, tint = Cyan, modifier = Modifier.size(20.dp)); Spacer(Modifier.width(10.dp)); Text(item, color = aboutCardText) } }
                 }
             }
             Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(if (isFa) "توسعه‌دهنده" else "Developer", color = Cyan, fontWeight = FontWeight.Bold)
-                    Text("سیدرضا هاشمی · S. Reza Hashemi", color = TextWhite)
+                    Text("سیدرضا هاشمی · S. Reza Hashemi", color = aboutCardText)
                     Text("hashemi.srh@gmail.com", color = Cyan, modifier = Modifier.clickable { runCatching { startActivity(Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:hashemi.srh@gmail.com"))) } })
-                    Text(if (isFa) "برای دریافت و فیلتر پیامک‌های ورودی، برنامه باید به‌عنوان پیام‌رسان پیش‌فرض انتخاب شده باشد و مجوز اعلان‌ها فعال باشد." else "To receive and filter incoming SMS, set this app as the default SMS app and allow notifications.", color = Muted, style = MaterialTheme.typography.bodySmall)
+                    Text(if (isFa) "برای دریافت و فیلتر پیامک‌های ورودی، برنامه باید به‌عنوان پیام‌رسان پیش‌فرض انتخاب شده باشد و مجوز اعلان‌ها فعال باشد." else "To receive and filter incoming SMS, set this app as the default SMS app and allow notifications.", color = aboutMuted, style = MaterialTheme.typography.bodySmall)
                 }
             }
         }

@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.os.Build
@@ -62,6 +63,21 @@ class SmsForwardingReceiver : BroadcastReceiver() {
             try {
                 val parts = manager.divideMessage(body)
                 if (parts.size > 1) manager.sendMultipartTextMessage(destination, null, parts, null, null) else manager.sendTextMessage(destination, null, body, null, null)
+                // SmsManager transmits messages but does not reliably add them to the system
+                // Sent provider. Persist the forwarded copy so it appears in that recipient's chat.
+                runCatching {
+                    val sentAt = System.currentTimeMillis()
+                    val values = ContentValues().apply {
+                        put(Telephony.Sms.ADDRESS, destination)
+                        put(Telephony.Sms.BODY, body)
+                        put(Telephony.Sms.DATE, sentAt)
+                        put(Telephony.Sms.DATE_SENT, sentAt)
+                        put(Telephony.Sms.TYPE, Telephony.Sms.MESSAGE_TYPE_SENT)
+                        put(Telephony.Sms.READ, 1)
+                        put(Telephony.Sms.SEEN, 1)
+                    }
+                    context.contentResolver.insert(Telephony.Sms.Sent.CONTENT_URI, values)
+                }.onFailure { android.util.Log.e("SMSGuardian", "Forwarded SMS sent but could not be saved in Sent history", it) }
                 ok++
             } catch (_: Exception) { failed++ }
         }
