@@ -62,6 +62,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.combinedClickable
 import androidx.core.view.WindowCompat
 import androidx.compose.ui.text.font.FontWeight
@@ -453,7 +455,7 @@ class MainActivity : ComponentActivity() {
         var language by remember { mutableStateOf(getPreferences(MODE_PRIVATE).getString("language", "en") ?: "en") }
         var page by remember { mutableStateOf("chats") }
         var bgChoice by remember { mutableIntStateOf(getPreferences(MODE_PRIVATE).getInt("bg_choice", 3)) }
-        var launcherIconChoice by remember { mutableIntStateOf(getPreferences(MODE_PRIVATE).getInt("launcher_icon_choice", 0)) }
+        var launcherIconChoice by remember { mutableIntStateOf(getPreferences(MODE_PRIVATE).getInt("launcher_icon_choice", 3)) }
         val appBg = when (bgChoice) { 1 -> Color(0xFF24152F); 2 -> Color(0xFF102A24); 3 -> Color(0xFFF7F9FC); else -> Navy }
         val lightTheme = bgChoice == 3
         Panel = if (lightTheme) Color(0xFFFFFFFF) else when (bgChoice) { 1 -> Color(0xFF33213F); 2 -> Color(0xFF18382F); else -> Color(0xFF111F35) }
@@ -462,6 +464,14 @@ class MainActivity : ComponentActivity() {
         Cyan = if (lightTheme) Color(0xFF087F8C) else Color(0xFF12C9C3)
         var refresh by remember { mutableIntStateOf(0) }
         LaunchedEffect(smsRoleRefreshSignal) { refresh++ }
+        LaunchedEffect(Unit) {
+            val migration = getPreferences(MODE_PRIVATE)
+            if (!migration.getBoolean("minimal_icon_default_applied", false)) {
+                setLauncherIcon(3)
+                launcherIconChoice = 3
+                migration.edit().putBoolean("minimal_icon_default_applied", true).apply()
+            }
+        }
         val isFa = language == "fa"
         val direction = if (isFa) LayoutDirection.Rtl else LayoutDirection.Ltr
         CompositionLocalProvider(LocalLayoutDirection provides direction) {
@@ -471,6 +481,7 @@ class MainActivity : ComponentActivity() {
                         Header(isFa, page, { language = if (language == "fa") "en" else "fa"; getPreferences(MODE_PRIVATE).edit().putString("language", language).apply() }, { page = it })
                         when (page) {
                             "rules" -> RulesPage(isFa, refresh) { refresh++ }
+                            "forwarding" -> SmsForwardingPage(isFa)
                             "settings" -> SettingsPage(isFa, language, { language = it; getPreferences(MODE_PRIVATE).edit().putString("language", it).apply() }, { requestDefaultSmsRole() }, bgChoice, { choice -> bgChoice = choice; getPreferences(MODE_PRIVATE).edit().putInt("bg_choice", choice).apply() }, launcherIconChoice) { choice -> launcherIconChoice = choice; setLauncherIcon(choice) }
                             "about" -> AboutPage(isFa)
                             "deleted" -> DeletedMessagesPage(isFa, refresh) { refresh++ }
@@ -495,7 +506,7 @@ class MainActivity : ComponentActivity() {
             Box {
                 IconButton(onClick = { menuExpanded = true }) { Icon(Icons.Default.Menu, contentDescription = if (isFa) "منو" else "Menu", tint = Cyan) }
                 DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
-                    listOf("chats" to (if (isFa) "گفتگوها" else "Chats"), "rules" to (if (isFa) "قوانین بلاک" else "Blocking rules"), "settings" to (if (isFa) "تنظیمات" else "Settings"), "about" to (if (isFa) "درباره ما" else "About")).forEach { (target, label) ->
+                    listOf("chats" to (if (isFa) "گفتگوها" else "Chats"), "rules" to (if (isFa) "قوانین بلاک" else "Blocking rules"), "forwarding" to (if (isFa) "فوروارد خودکار پیامک" else "SMS forwarding"), "settings" to (if (isFa) "تنظیمات" else "Settings"), "about" to (if (isFa) "درباره ما" else "About")).forEach { (target, label) ->
                         DropdownMenuItem(text = { Text(label) }, onClick = { menuExpanded = false; navigate(target) })
                     }
                 }
@@ -503,7 +514,7 @@ class MainActivity : ComponentActivity() {
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text("SMS Guardian", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = TextWhite)
-                Text(if (page == "chats") { if (isFa) "پیام‌رسان امن شما" else "Your secure inbox" } else if (page == "rules") { if (isFa) "مدیریت قوانین هوشمند" else "Smart filtering rules" } else { if (isFa) "شخصی‌سازی برنامه" else "Personalize your app" }, color = Muted, style = MaterialTheme.typography.bodySmall)
+                Text(if (page == "chats") { if (isFa) "پیام‌رسان امن شما" else "Your secure inbox" } else if (page == "rules") { if (isFa) "مدیریت قوانین هوشمند" else "Smart filtering rules" } else if (page == "forwarding") { if (isFa) "ارسال خودکار پیامک‌های مطابق شرط" else "Automatically forward matching SMS" } else { if (isFa) "شخصی‌سازی برنامه" else "Personalize your app" }, color = Muted, style = MaterialTheme.typography.bodySmall)
             }
             Icon(Icons.Default.Language, null, tint = Cyan, modifier = Modifier.clickable(onClick = toggleLanguage).padding(8.dp))
         }
@@ -985,6 +996,75 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    @Composable private fun SmsForwardingPage(isFa: Boolean) {
+        val prefs = getSharedPreferences(SmsForwarding.PREFS, MODE_PRIVATE)
+        var source by remember { mutableStateOf(prefs.getString("source", "") ?: "") }
+        var keyword by remember { mutableStateOf(prefs.getString("keyword", "") ?: "") }
+        var d1 by remember { mutableStateOf(prefs.getString("destination1", "") ?: "") }
+        var d2 by remember { mutableStateOf(prefs.getString("destination2", "") ?: "") }
+        var d3 by remember { mutableStateOf(prefs.getString("destination3", "") ?: "") }
+        var enabled by remember { mutableStateOf(prefs.getBoolean("enabled", false)) }
+        var last by remember { mutableStateOf(prefs.getString("last", "") ?: "") }
+        var reportTitle by remember { mutableStateOf("") }
+        var reportBody by remember { mutableStateOf("") }
+        val scroll = rememberScrollState()
+        Column(Modifier.fillMaxSize().verticalScroll(scroll).padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(if (isFa) "فوروارد خودکار پیامک" else "Automatic SMS forwarding", style = MaterialTheme.typography.titleLarge, color = TextWhite, fontWeight = FontWeight.Bold)
+            Text(if (isFa) "قانون‌ها فقط روی همین گوشی ذخیره می‌شوند. هنگام فعال بودن، اعلان دائمی وضعیت نمایش داده می‌شود." else "Rules are stored locally on this phone. An ongoing status notification is shown while forwarding is enabled.", color = Muted, style = MaterialTheme.typography.bodySmall)
+            Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(14.dp)).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(if (enabled) (if (isFa) "فوروارد فعال است" else "Forwarding is active") else (if (isFa) "فوروارد غیرفعال است" else "Forwarding is inactive"), color = TextWhite, fontWeight = FontWeight.SemiBold)
+                    Text(if (isFa) "فعال‌سازی بعد از ذخیره تنظیمات" else "Settings must be saved before activation", color = Muted, style = MaterialTheme.typography.bodySmall)
+                }
+                Switch(checked = enabled, onCheckedChange = { on ->
+                    val dests = listOf(d1,d2,d3).any { it.isNotBlank() }
+                    if (on && !dests) { android.widget.Toast.makeText(this@MainActivity, if (isFa) "حداقل یک شماره مقصد وارد کنید و ذخیره کنید." else "Enter and save at least one destination first.", android.widget.Toast.LENGTH_LONG).show() }
+                    else {
+                        enabled = on
+                        prefs.edit().putString("source", source.trim()).putString("keyword", keyword.trim())
+                            .putString("destination1", d1.trim()).putString("destination2", d2.trim()).putString("destination3", d3.trim())
+                            .putBoolean("enabled", on).apply()
+                        if (on) SmsForwarding.showStatus(this@MainActivity) else SmsForwarding.hideStatus(this@MainActivity)
+                    }
+                })
+            }
+            Text(if (isFa) "شماره فرستنده (اختیاری)" else "Sender number (optional)", color = TextWhite, fontWeight = FontWeight.Medium)
+            OutlinedTextField(value = source, onValueChange = { source = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text(if (isFa) "خالی = هر شماره‌ای" else "Blank = any sender") })
+            Text(if (isFa) "عبارت موردنظر (اختیاری)" else "Keyword (optional)", color = TextWhite, fontWeight = FontWeight.Medium)
+            OutlinedTextField(value = keyword, onValueChange = { keyword = it }, modifier = Modifier.fillMaxWidth(), placeholder = { Text(if (isFa) "خالی = هر پیامکی" else "Blank = every SMS") })
+            Text(if (isFa) "شماره مقصد ۱ (اجباری)" else "Destination 1 (required)", color = TextWhite, fontWeight = FontWeight.Medium)
+            OutlinedTextField(value = d1, onValueChange = { d1 = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("+98912…") })
+            Text(if (isFa) "شماره مقصد ۲ (اختیاری)" else "Destination 2 (optional)", color = TextWhite, fontWeight = FontWeight.Medium)
+            OutlinedTextField(value = d2, onValueChange = { d2 = it }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+            Text(if (isFa) "شماره مقصد ۳ (اختیاری)" else "Destination 3 (optional)", color = TextWhite, fontWeight = FontWeight.Medium)
+            OutlinedTextField(value = d3, onValueChange = { d3 = it }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+            Button(onClick = {
+                if (listOf(d1,d2,d3).none { it.isNotBlank() }) {
+                    android.widget.Toast.makeText(this@MainActivity, if (isFa) "حداقل یک شماره مقصد لازم است." else "At least one destination is required.", android.widget.Toast.LENGTH_LONG).show()
+                } else {
+                    prefs.edit().putString("source", source.trim()).putString("keyword", keyword.trim()).putString("destination1", d1.trim()).putString("destination2", d2.trim()).putString("destination3", d3.trim()).putBoolean("enabled", enabled).apply()
+                    if (enabled) SmsForwarding.showStatus(this@MainActivity) else SmsForwarding.hideStatus(this@MainActivity)
+                    android.widget.Toast.makeText(this@MainActivity, if (isFa) "تنظیمات فوروارد ذخیره شد." else "Forwarding settings saved.", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            }, modifier = Modifier.fillMaxWidth()) { Text(if (isFa) "ذخیره تنظیمات" else "Save settings") }
+            Text(if (isFa) "آخرین وضعیت: ${last.ifBlank { "هنوز فورواردی ثبت نشده" }}\nموفق: ${prefs.getInt("total_ok",0)}  •  ناموفق: ${prefs.getInt("total_failed",0)}" else "Last status: ${last.ifBlank { "No forwarding yet" }}\nSuccessful: ${prefs.getInt("total_ok",0)}  •  Failed: ${prefs.getInt("total_failed",0)}", color = Muted, style = MaterialTheme.typography.bodySmall)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = {
+                    val day = java.text.SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+                    reportTitle = if (isFa) "گزارش امروز" else "Daily report"
+                    reportBody = "${if (isFa) "موفق" else "Successful"}: ${prefs.getInt("day_${day}_ok",0)}\n${if (isFa) "ناموفق" else "Failed"}: ${prefs.getInt("day_${day}_fail",0)}"
+                }, modifier = Modifier.weight(1f)) { Text(if (isFa) "گزارش روزانه" else "Daily report") }
+                OutlinedButton(onClick = {
+                    val month = java.text.SimpleDateFormat("yyyy-MM", Locale.US).format(Date())
+                    reportTitle = if (isFa) "گزارش ماهانه" else "Monthly report"
+                    reportBody = "${if (isFa) "موفق" else "Successful"}: ${prefs.getInt("month_${month}_ok",0)}\n${if (isFa) "ناموفق" else "Failed"}: ${prefs.getInt("month_${month}_fail",0)}"
+                }, modifier = Modifier.weight(1f)) { Text(if (isFa) "گزارش ماهانه" else "Monthly report") }
+            }
+            OutlinedButton(onClick = { reportTitle = if (isFa) "تاریخچه فوروارد" else "Forwarding history"; reportBody = prefs.getString("history", "").orEmpty().ifBlank { if (isFa) "هنوز تاریخچه‌ای وجود ندارد." else "No forwarding history yet." } }, modifier = Modifier.fillMaxWidth()) { Text(if (isFa) "نمایش تاریخچه" else "View history") }
+        }
+        if (reportTitle.isNotBlank()) AlertDialog(onDismissRequest = { reportTitle = "" }, title = { Text(reportTitle) }, text = { Text(reportBody) }, confirmButton = { TextButton(onClick = { reportTitle = "" }) { Text(if (isFa) "بستن" else "Close") } })
     }
 
     @Composable private fun SettingsPage(isFa: Boolean, language: String, changeLanguage: (String) -> Unit, requestRole: () -> Unit, bgChoice: Int, changeBackground: (Int) -> Unit, iconChoice: Int, changeIcon: (Int) -> Unit) {

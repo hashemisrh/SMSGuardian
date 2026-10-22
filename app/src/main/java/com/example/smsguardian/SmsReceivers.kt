@@ -79,7 +79,7 @@ private fun showSmsNotification(context: Context, sender: String, body: String) 
         return
     }
     val notification = NotificationCompat.Builder(context, channelId)
-        .setSmallIcon(com.example.smsguardian.R.drawable.ic_sms_guardian)
+        .setSmallIcon(com.example.smsguardian.R.drawable.ic_notification_minimal)
         .setContentTitle(lookupSenderDisplayName(context, sender))
         .setContentText(body.ifBlank { "پیامک جدید دریافت شد" })
         .setStyle(NotificationCompat.BigTextStyle().bigText(body))
