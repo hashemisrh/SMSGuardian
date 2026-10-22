@@ -81,7 +81,7 @@ private var Cyan = Color(0xFF12C9C3)
 private var TextWhite = Color(0xFFF1F6FF)
 private var Muted = Color(0xFF9AAAC3)
 private data class ContactSuggestion(val name: String, val number: String)
-private data class ConversationPreview(val address: String, val messages: List<SmsRow>, val contactName: String?)
+private data class ConversationPreview(val address: String, val latestMessage: SmsRow, val contactName: String?)
 
 data class SmsRow(val address: String, val body: String, val date: Long, val type: Int)
 
@@ -324,11 +324,28 @@ class MainActivity : ComponentActivity() {
         getPreferences(MODE_PRIVATE).edit().putInt("launcher_icon_choice", choice.coerceIn(0, aliases.lastIndex)).apply()
     }
 
+    private fun latestRowsByConversation(rows: List<SmsRow>): List<SmsRow> {
+        // Keep only one row per address for the main list. Do not build a List<SmsRow>
+        // for every thread: with hundreds of conversations and a large history this
+        // was the main source of avoidable allocation and repeated work.
+        val latestByAddress = HashMap<String, SmsRow>(rows.size.coerceAtMost(4096))
+        for (row in rows) {
+            if (row.address.isBlank()) continue
+            val previous = latestByAddress[row.address]
+            if (previous == null || row.date > previous.date) latestByAddress[row.address] = row
+        }
+        return latestByAddress.values.sortedByDescending { it.date }
+    }
+
     private fun getConversationPreviews(rows: List<SmsRow>): List<ConversationPreview> {
-        cachedConversationPreviews?.let { return it }
-        return rows.groupBy { it.address }.map { (address, messages) ->
-            ConversationPreview(address, messages, lookupContactName(address))
-        }.also { cachedConversationPreviews = it }
+        cachedConversationPreviews?.let { cached ->
+            if (cached.size == rows.size && cached.firstOrNull()?.latestMessage == rows.firstOrNull()) return cached
+        }
+        val previews = rows.map { row ->
+            ConversationPreview(row.address, row, lookupContactName(row.address))
+        }
+        cachedConversationPreviews = previews
+        return previews
     }
 
     private fun readSmsRowsCache(): List<SmsRow> = loadSmsRowsFromFile(smsRecentCacheFileName)
@@ -393,13 +410,16 @@ class MainActivity : ComponentActivity() {
             try {
                 val fresh = querySmsRows()
                 if (fresh.isNotEmpty() || ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED) {
-                    writeSmsRowsCache(fresh)
-                    writeRecentSmsRowsCache(fresh.take(1500))
+                    // Publish the compact conversation index before serializing the potentially
+                    // huge full history to disk. The UI can refresh as soon as the query ends.
                     cachedAllSmsRows = fresh
-                    cachedSmsRows = fresh
+                    cachedSmsRows = latestRowsByConversation(fresh)
                     cachedConversationPreviews = null
                     lastSmsRefreshAt = System.currentTimeMillis()
                     launch(Dispatchers.Main) { smsRoleRefreshSignal++ }
+                    // Disk persistence is secondary; keep it off the critical refresh path.
+                    writeSmsRowsCache(fresh)
+                    writeRecentSmsRowsCache(fresh.take(1500))
                 }
             } catch (e: Exception) {
                 android.util.Log.e("SMSGuardian", "Background SMS refresh failed", e)
@@ -415,16 +435,18 @@ class MainActivity : ComponentActivity() {
         // Disk cache makes subsequent launches and returning from menus immediate.
         val diskRows = readSmsRowsCache()
         if (diskRows.isNotEmpty()) {
-            cachedSmsRows = diskRows
+            val compactRows = latestRowsByConversation(diskRows)
+            cachedSmsRows = compactRows
             requestSmsRowsRefresh()
-            return diskRows
+            return compactRows
         }
         // First launch: show recent conversations quickly, then load the full history in the background.
         val recentRows = querySmsRows(limit = 1500)
-        cachedSmsRows = recentRows
+        val compactRows = latestRowsByConversation(recentRows)
+        cachedSmsRows = compactRows
         if (recentRows.isNotEmpty()) writeRecentSmsRowsCache(recentRows)
         requestSmsRowsRefresh(force = true)
-        return recentRows
+        return compactRows
     }
 
     @Composable private fun GuardianApp() {
@@ -524,7 +546,7 @@ class MainActivity : ComponentActivity() {
         }
         val currentNumber = selectedNumber
         if (currentNumber != null) {
-            val threadSource = if (targetMessage != null) (cachedAllSmsRows ?: rows) else rows
+            val threadSource = cachedAllSmsRows ?: rows
             val thread = threadSource.filter { it.address.equals(currentNumber, ignoreCase = true) }.sortedBy { it.date }
             Column(Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -665,7 +687,7 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(groupedConversations, query) {
                     conversations = if (query.isBlank()) {
                         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-                            groupedConversations.mapNotNull { it.messages.maxByOrNull { row -> row.date } }.sortedByDescending { it.date }
+                            groupedConversations.map { it.latestMessage }
                         }
                     } else {
                         val allRows = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { loadAllSmsRows() }
@@ -710,43 +732,14 @@ class MainActivity : ComponentActivity() {
             if (isFa) "حذف این گفتگو" else "Delete conversation",
             if (isFa) "مسدود کردن این شماره" else "Block this number",
             if (isFa) "مسدود کردن سرشماره" else "Block sender prefix",
+            if (isFa) "بلاک شماره و حذف گفتگو" else "Block Number & Delete Conversation",
             if (isFa) "لغو" else "Cancel"
         )
         android.app.AlertDialog.Builder(this)
             .setTitle(if (isFa) "مدیریت گفتگو: $number" else "Conversation: $number")
             .setItems(options) { dialog, which ->
                 when (which) {
-                    0 -> android.app.AlertDialog.Builder(this).setTitle(if (isFa) "حذف گفتگو؟" else "Delete conversation?")
-                        .setMessage(if (isFa) "تمام پیامک‌های این شماره از صندوق پیامک حذف می‌شوند." else "All SMS messages for this number will be deleted from the SMS provider.")
-                        .setNegativeButton(if (isFa) "انصراف" else "Cancel", null)
-                        .setPositiveButton(if (isFa) "حذف" else "Delete") { _, _ ->
-                            // Update the visible list immediately; archive and provider deletion run off the UI thread.
-                            val currentRows = cachedSmsRows ?: emptyList()
-                            val toArchive = currentRows.filter { it.address == number }
-                            cachedSmsRows = currentRows.filterNot { it.address == number }
-                            cachedConversationPreviews = null
-                            changed()
-                            android.widget.Toast.makeText(this, if (isFa) "در حال حذف گفتگو…" else "Deleting conversation…", android.widget.Toast.LENGTH_SHORT).show()
-                            lifecycleScope.launch {
-                                val result = withContext(Dispatchers.IO) {
-                                    runCatching {
-                                        archiveDeletedMessages(toArchive)
-                                        contentResolver.delete(Telephony.Sms.CONTENT_URI, "address = ?", arrayOf(number))
-                                    }
-                                }
-                                result.onSuccess {
-                                    cachedSmsRows = (cachedSmsRows ?: emptyList()).filterNot { it.address == number }
-                                    cachedConversationPreviews = null
-                                    changed()
-                                    android.widget.Toast.makeText(this@MainActivity, if (isFa) "گفتگو حذف شد" else "Conversation deleted", android.widget.Toast.LENGTH_SHORT).show()
-                                }.onFailure {
-                                    cachedSmsRows = null
-                                    cachedConversationPreviews = null
-                                    changed()
-                                    android.widget.Toast.makeText(this@MainActivity, if (isFa) "حذف گفتگو ناموفق بود" else "Could not delete conversation", android.widget.Toast.LENGTH_LONG).show()
-                                }
-                            }
-                        }.show()
+                    0 -> confirmDeleteConversation(number, isFa, changed)
                     1 -> { RuleStore.addBlocked(this, number); changed(); android.widget.Toast.makeText(this, if (isFa) "شماره بلاک شد" else "Number blocked", android.widget.Toast.LENGTH_SHORT).show() }
                     2 -> {
                         val prefix = number.filter { it.isDigit() || it == '+' }.take(5)
@@ -754,8 +747,51 @@ class MainActivity : ComponentActivity() {
                         changed()
                         android.widget.Toast.makeText(this, if (isFa) "سرشماره $prefix به فهرست بلاک اضافه شد" else "Prefix $prefix blocked", android.widget.Toast.LENGTH_LONG).show()
                     }
+                    3 -> {
+                        RuleStore.addBlocked(this, number)
+                        changed()
+                        confirmDeleteConversation(number, isFa, changed)
+                    }
                 }
                 dialog.dismiss()
+            }.show()
+    }
+
+    private fun confirmDeleteConversation(number: String, isFa: Boolean, changed: () -> Unit) {
+        android.app.AlertDialog.Builder(this).setTitle(if (isFa) "حذف گفتگو؟" else "Delete conversation?")
+            .setMessage(if (isFa) "تمام پیامک‌های این شماره از صندوق پیامک حذف می‌شوند." else "All SMS messages for this number will be deleted from the SMS provider.")
+            .setNegativeButton(if (isFa) "انصراف" else "Cancel", null)
+            .setPositiveButton(if (isFa) "حذف" else "Delete") { _, _ ->
+                val currentRows = cachedSmsRows ?: emptyList()
+                val hadFullHistory = cachedAllSmsRows != null
+                val allCurrentRows = cachedAllSmsRows ?: currentRows
+                val toArchive = allCurrentRows.filter { it.address == number }
+                cachedSmsRows = currentRows.filterNot { it.address == number }
+                cachedAllSmsRows = if (hadFullHistory) allCurrentRows.filterNot { it.address == number } else null
+                cachedConversationPreviews = null
+                changed()
+                android.widget.Toast.makeText(this, if (isFa) "در حال حذف گفتگو…" else "Deleting conversation…", android.widget.Toast.LENGTH_SHORT).show()
+                lifecycleScope.launch {
+                    val result = withContext(Dispatchers.IO) {
+                        runCatching {
+                            archiveDeletedMessages(toArchive)
+                            contentResolver.delete(Telephony.Sms.CONTENT_URI, "address = ?", arrayOf(number))
+                        }
+                    }
+                    result.onSuccess {
+                        cachedSmsRows = (cachedSmsRows ?: emptyList()).filterNot { it.address == number }
+                        cachedAllSmsRows = cachedAllSmsRows?.filterNot { it.address == number }
+                        cachedConversationPreviews = null
+                        changed()
+                        android.widget.Toast.makeText(this@MainActivity, if (isFa) "گفتگو حذف شد" else "Conversation deleted", android.widget.Toast.LENGTH_SHORT).show()
+                    }.onFailure {
+                        cachedSmsRows = null
+                        cachedAllSmsRows = null
+                        cachedConversationPreviews = null
+                        changed()
+                        android.widget.Toast.makeText(this@MainActivity, if (isFa) "حذف گفتگو ناموفق بود" else "Could not delete conversation", android.widget.Toast.LENGTH_LONG).show()
+                    }
+                }
             }.show()
     }
 
