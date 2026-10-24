@@ -1,3 +1,13 @@
+## Version 1.1.0 (SMS Guardian v25)
+
+- Main inbox now queries Android's SMS conversation summary view rather than taking a capped window of individual SMS rows.
+- Thread history is loaded on demand for the selected phone number.
+- SMS/MMS/thread ContentObservers trigger a debounced refresh; a refresh arriving during an active refresh is queued.
+- Phonebook names are indexed in one query instead of running multiple Contacts queries per conversation.
+- Added URL links in message bodies, persistent per-conversation drafts, and an explicit back button beside the composer.
+
+Build/test note: this source archive has not been compiled on this host because Gradle/Gradle wrapper is unavailable here.
+
 # SMS Guardian
 
 Android SMS app project built with Kotlin and Jetpack Compose.
