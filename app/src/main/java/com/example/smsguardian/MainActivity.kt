@@ -43,6 +43,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.FilterAlt
@@ -572,23 +574,48 @@ class MainActivity : ComponentActivity() {
         var page by remember { mutableStateOf("chats") }
         var bgChoice by remember { mutableIntStateOf(getPreferences(MODE_PRIVATE).getInt("bg_choice", 3)) }
         var launcherIconChoice by remember { mutableIntStateOf(getPreferences(MODE_PRIVATE).getInt("launcher_icon_choice", 3)) }
-        val appBg = when (bgChoice) { 1 -> Color(0xFF24152F); 2 -> Color(0xFF102A24); 3 -> Color(0xFFF7F9FC); else -> Navy }
+        val appBg = when (bgChoice) {
+            1 -> Color(0xFF24152F) // Purple
+            2 -> Color(0xFF102A24) // Forest
+            3 -> Color(0xFFF7F9FC) // White
+            4 -> Color(0xFF050608) // Midnight Black
+            5 -> Color(0xFF35172C) // Pink
+            6 -> Color(0xFF3B0718) // Cherry
+            7 -> Color(0xFF09213B) // Deep Ocean
+            8 -> Color(0xFF33240D) // Amber
+            9 -> Color(0xFF172D2A) // Jade
+            else -> Navy
+        }
         val lightTheme = bgChoice == 3
-        Panel = if (lightTheme) Color(0xFFFFFFFF) else when (bgChoice) { 1 -> Color(0xFF33213F); 2 -> Color(0xFF18382F); else -> Color(0xFF111F35) }
+        Panel = if (lightTheme) Color(0xFFFFFFFF) else when (bgChoice) {
+            1 -> Color(0xFF33213F); 2 -> Color(0xFF18382F); 4 -> Color(0xFF111214)
+            5 -> Color(0xFF4A203B); 6 -> Color(0xFF521025); 7 -> Color(0xFF123250)
+            8 -> Color(0xFF493414); 9 -> Color(0xFF23413C); else -> Color(0xFF111F35)
+        }
         TextWhite = if (lightTheme) Color(0xFF172033) else Color(0xFFF1F6FF)
-        Muted = if (lightTheme) Color(0xFF647084) else Color(0xFF9AAAC3)
-        Cyan = if (lightTheme) Color(0xFF087F8C) else Color(0xFF12C9C3)
+        Muted = if (lightTheme) Color(0xFF647084) else Color(0xFFB4C0D2)
+        Cyan = if (lightTheme) Color(0xFF087F8C) else if (bgChoice == 5 || bgChoice == 6) Color(0xFFFF9CC8) else Color(0xFF12C9C3)
         var refresh by remember { mutableIntStateOf(0) }
         LaunchedEffect(smsRoleRefreshSignal) { refresh++ }
         LaunchedEffect(Unit) {
             val migration = getPreferences(MODE_PRIVATE)
+            // Minimal is the default only on a truly fresh install. Never overwrite
+            // a previously saved user's launcher icon when the app starts/upgrades.
             if (!migration.getBoolean("minimal_icon_default_applied", false)) {
-                setLauncherIcon(3)
-                launcherIconChoice = 3
+                if (!migration.contains("launcher_icon_choice")) {
+                    setLauncherIcon(3)
+                    launcherIconChoice = 3
+                } else {
+                    launcherIconChoice = migration.getInt("launcher_icon_choice", 3).coerceIn(0, 3)
+                    setLauncherIcon(launcherIconChoice)
+                }
                 migration.edit().putBoolean("minimal_icon_default_applied", true).apply()
+            } else {
+                launcherIconChoice = migration.getInt("launcher_icon_choice", 3).coerceIn(0, 3)
             }
         }
         val isFa = language == "fa"
+        BackHandler(enabled = page != "chats") { page = "chats" }
         val direction = if (isFa) LayoutDirection.Rtl else LayoutDirection.Ltr
         CompositionLocalProvider(LocalLayoutDirection provides direction) {
             MaterialTheme(colorScheme = if (lightTheme) lightColorScheme(primary = Cyan, secondary = Color(0xFF356BCE), background = appBg, surface = Panel, onBackground = TextWhite, onSurface = TextWhite) else darkColorScheme(primary = Cyan, secondary = Color(0xFF356BCE), background = appBg, surface = Panel, onBackground = TextWhite, onSurface = TextWhite)) {
@@ -618,22 +645,36 @@ class MainActivity : ComponentActivity() {
 
     @Composable private fun Header(isFa: Boolean, page: String, toggleLanguage: () -> Unit, navigate: (String) -> Unit) {
         var menuExpanded by remember { mutableStateOf(false) }
+        var showDonate by remember { mutableStateOf(false) }
+        BackHandler(enabled = menuExpanded) { menuExpanded = false }
         Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(bottomStart = 18.dp, bottomEnd = 18.dp)).padding(horizontal = 20.dp, vertical = 18.dp), verticalAlignment = Alignment.CenterVertically) {
             Box {
                 IconButton(onClick = { menuExpanded = true }) { Icon(Icons.Default.Menu, contentDescription = if (isFa) "منو" else "Menu", tint = Cyan) }
                 DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.ArrowBack, null) }, text = { Text(if (isFa) "بازگشت به گفتگوها" else "Back to chats") }, onClick = { menuExpanded = false; navigate("chats") })
                     listOf("chats" to (if (isFa) "گفتگوها" else "Chats"), "rules" to (if (isFa) "قوانین بلاک" else "Blocking rules"), "forwarding" to (if (isFa) "فوروارد خودکار پیامک" else "SMS forwarding"), "settings" to (if (isFa) "تنظیمات" else "Settings"), "about" to (if (isFa) "درباره ما" else "About")).forEach { (target, label) ->
                         DropdownMenuItem(text = { Text(label) }, onClick = { menuExpanded = false; navigate(target) })
                     }
+                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Favorite, null) }, text = { Text(if (isFa) "حمایت مالی / Donate" else "Donate / Support") }, onClick = { menuExpanded = false; showDonate = true })
                 }
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text("SMS Guardian", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = TextWhite)
-                Text(if (page == "chats") { if (isFa) "پیام‌رسان امن شما" else "Your secure inbox" } else if (page == "rules") { if (isFa) "مدیریت قوانین هوشمند" else "Smart filtering rules" } else if (page == "forwarding") { if (isFa) "ارسال خودکار پیامک‌های مطابق شرط" else "Automatically forward matching SMS" } else { if (isFa) "شخصی‌سازی برنامه" else "Personalize your app" }, color = Muted, style = MaterialTheme.typography.bodySmall)
+                Text(if (page == "chats") "Messenger; But Lovely" else if (page == "rules") { if (isFa) "مدیریت قوانین هوشمند" else "Smart filtering rules" } else if (page == "forwarding") { if (isFa) "ارسال خودکار پیامک‌های مطابق شرط" else "Automatically forward matching SMS" } else { if (isFa) "شخصی‌سازی برنامه" else "Personalize your app" }, color = Muted, style = MaterialTheme.typography.bodySmall)
             }
             Icon(Icons.Default.Language, null, tint = Cyan, modifier = Modifier.clickable(onClick = toggleLanguage).padding(8.dp))
         }
+        if (showDonate) AlertDialog(
+            onDismissRequest = { showDonate = false },
+            title = { Text(if (isFa) "حمایت از توسعه برنامه" else "Support development") },
+            text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(if (isFa) "از حمایت شما سپاسگزارم. شماره کارت:" else "Thank you for supporting the app. Bank card number:")
+                Text("5054161017807474", color = Cyan, fontWeight = FontWeight.Bold)
+            } },
+            confirmButton = { TextButton(onClick = { (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Donation card", "5054161017807474")); android.widget.Toast.makeText(this@MainActivity, if (isFa) "شماره کارت کپی شد" else "Card number copied", android.widget.Toast.LENGTH_SHORT).show(); showDonate = false }) { Text(if (isFa) "کپی شماره کارت" else "Copy card number") } },
+            dismissButton = { TextButton(onClick = { showDonate = false }) { Text(if (isFa) "بستن" else "Close") } }
+        )
     }
 
     @Composable private fun ChatsPage(isFa: Boolean, refresh: Int, bgChoice: Int, loadRows: () -> List<SmsRow>, send: (String, String, Int?) -> Unit) {
@@ -681,6 +722,8 @@ class MainActivity : ComponentActivity() {
         }
         if (currentNumber != null) {
             var loadedThreadRows by remember(currentNumber) { mutableStateOf<List<SmsRow>?>(null) }
+            var threadSearchExpanded by remember(currentNumber) { mutableStateOf(false) }
+            var threadSearchQuery by remember(currentNumber) { mutableStateOf("") }
             LaunchedEffect(currentNumber) {
                 threadMessage = getPreferences(MODE_PRIVATE).getString(draftKey(currentNumber), "") ?: ""
             }
@@ -708,8 +751,35 @@ class MainActivity : ComponentActivity() {
                             }.onFailure { android.widget.Toast.makeText(this@MainActivity, if (isFa) "باز کردن افزودن مخاطب ممکن نشد" else "Could not open contact creation", android.widget.Toast.LENGTH_SHORT).show() }
                         }) { Icon(Icons.Default.PersonAdd, contentDescription = if (isFa) "افزودن به مخاطبین" else "Add to contacts", tint = Cyan) }
                     }
+                    IconButton(onClick = { threadSearchExpanded = !threadSearchExpanded; if (!threadSearchExpanded) threadSearchQuery = "" }) {
+                        Icon(if (threadSearchExpanded) Icons.Default.Close else Icons.Default.Search, contentDescription = if (isFa) "جست‌وجو در این گفتگو" else "Search this conversation", tint = Cyan)
+                    }
                     IconButton(onClick = { runCatching { startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:${Uri.encode(currentNumber)}"))) } }) {
                         Icon(Icons.Default.Call, contentDescription = if (isFa) "تماس" else "Call", tint = Cyan)
+                    }
+                }
+                val searchMatches = remember(thread, threadSearchQuery) {
+                    if (threadSearchQuery.isBlank()) emptyList() else thread.withIndex().filter { it.value.body.contains(threadSearchQuery, ignoreCase = true) }.take(100)
+                }
+                AnimatedVisibility(visible = threadSearchExpanded, enter = expandVertically(), exit = shrinkVertically()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        OutlinedTextField(value = threadSearchQuery, onValueChange = { threadSearchQuery = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text(if (isFa) "جست‌وجو در پیام‌های این گفتگو" else "Search messages in this chat") }, leadingIcon = { Icon(Icons.Default.Search, null) }, trailingIcon = { if (threadSearchQuery.isNotEmpty()) IconButton(onClick = { threadSearchQuery = "" }) { Icon(Icons.Default.Close, null) } })
+                        if (threadSearchQuery.isNotBlank()) {
+                            Text(if (isFa) "${searchMatches.size} نتیجه (حداکثر ۱۰۰ مورد)" else "${searchMatches.size} results (up to 100)", color = Muted, style = MaterialTheme.typography.labelSmall)
+                            if (searchMatches.isNotEmpty()) Card(colors = CardDefaults.cardColors(containerColor = Panel), modifier = Modifier.fillMaxWidth().heightIn(max = 150.dp)) {
+                                LazyColumn {
+                                    items(searchMatches, key = { "thread-search-${it.index}-${it.value.date}" }) { match ->
+                                        Column(Modifier.fillMaxWidth().clickable {
+                                            targetMessage = match.value
+                                            threadSearchExpanded = false
+                                        }.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                                            Text(match.value.body, color = TextWhite, maxLines = 2)
+                                            Text(SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(match.value.date)), color = Muted, style = MaterialTheme.typography.labelSmall)
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 val threadListState = androidx.compose.foundation.lazy.rememberLazyListState()
@@ -1152,7 +1222,7 @@ class MainActivity : ComponentActivity() {
                     Box(Modifier.size(76.dp).background(Brush.linearGradient(listOf(Cyan, Color(0xFF356BCE))), CircleShape), contentAlignment = Alignment.Center) { Icon(Icons.Default.Chat, null, tint = Color.White, modifier = Modifier.size(38.dp)) }
                     Text("SMS Guardian", color = Color.White, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                     Text(if (isFa) "مدیریت هوشمند پیامک‌ها، فیلتر و کنترل گفتگوها" else "Smart SMS management, filtering and conversation control", color = Color.White.copy(alpha = 0.88f))
-                    Text("Version ${runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: "1.0.2"}", color = Color.White.copy(alpha = 0.85f), style = MaterialTheme.typography.labelMedium)
+                    Text("Version ${runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: "1.1.1"}", color = Color.White.copy(alpha = 0.85f), style = MaterialTheme.typography.labelMedium)
                     AssistChip(onClick = {}, colors = AssistChipDefaults.assistChipColors(containerColor = Color.White.copy(alpha = 0.14f), labelColor = Color.White, leadingIconContentColor = Color.White), label = { Text(if (isFa) "حریم خصوصی؛ اطلاعات روی دستگاه شما" else "Privacy-minded · on-device rules") }, leadingIcon = { Icon(Icons.Default.Settings, null) })
                 }
             }
@@ -1160,11 +1230,17 @@ class MainActivity : ComponentActivity() {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(if (isFa) "قابلیت‌ها" else "Features", color = Cyan, fontWeight = FontWeight.Bold)
                     listOf(
-                        if (isFa) "مدیریت گفتگوها و ارسال پیامک" else "Conversation management and SMS sending",
-                        if (isFa) "فیلتر بر اساس کلمات، شماره کامل و سرشماره" else "Filtering by keywords, full numbers and prefixes",
-                        if (isFa) "مدیریت فهرست مسدودها" else "Manage blocked senders",
-                        if (isFa) "تنظیم زبان و ظاهر برنامه" else "Customize language and appearance"
-                    ).forEach { item -> Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.FilterAlt, null, tint = Cyan, modifier = Modifier.size(20.dp)); Spacer(Modifier.width(10.dp)); Text(item, color = aboutCardText) } }
+                        if (isFa) "مدیریت گفتگوها و ارسال پیامک؛ پشتیبانی از پیامک‌های طولانی (با توجه به محدودیت اپراتور)" else "Conversation management and SMS sending, including long SMS (subject to carrier limits)",
+                        if (isFa) "بارگذاری سریع فهرست گفتگوها و به‌روزرسانی پیامک‌های ورودی و خروجی" else "Fast conversation loading and incoming/outgoing message refresh",
+                        if (isFa) "جست‌وجو در گفتگوها و پیام‌های داخل هر گفتگو" else "Search conversations and messages within a chat",
+                        if (isFa) "فوروارد دستی پیامک و فوروارد خودکار بر اساس شماره و عبارت" else "Manual SMS forwarding and automatic rule-based forwarding",
+                        if (isFa) "فیلتر بر اساس کلمات، شماره کامل و سرشماره؛ مسدودسازی و حذف گفتگو" else "Keyword, full-number and prefix filtering; blocking and conversation deletion",
+                        if (isFa) "نمایش پیامک‌های حذف‌شده و بازیابی آرشیو" else "Deleted-message archive and restoration",
+                        if (isFa) "لینک‌های قابل کلیک، پیش‌نویس خودکار و وضعیت ارسال/تحویل با تیک" else "Clickable links, saved drafts, and sent/delivered checkmarks",
+                        if (isFa) "انتخاب مخاطب از دفترچه تلفن، افزودن مخاطب و انتخاب سیم‌کارت" else "Contact picker, add-contact shortcut, and SIM selection",
+                        if (isFa) "انتخاب رنگ، آیکون و زبان برنامه" else "Custom themes, launcher icons, and language",
+                        if (isFa) "اعلان پیامک جدید و تنظیمات فوروارد" else "New-message notifications and forwarding settings"
+                    ).forEach { item -> Row(verticalAlignment = Alignment.Top) { Icon(Icons.Default.Check, null, tint = Cyan, modifier = Modifier.size(20.dp)); Spacer(Modifier.width(10.dp)); Text(item, color = aboutCardText) } }
                 }
             }
             Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
@@ -1253,7 +1329,18 @@ class MainActivity : ComponentActivity() {
             Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(if (isFa) "رنگ زمینه برنامه" else "App background color", color = TextWhite, fontWeight = FontWeight.Bold)
-                    listOf((0 to (if (isFa) "آبی تیره" else "Midnight blue")), (1 to (if (isFa) "بنفش" else "Purple")), (2 to (if (isFa) "سبز جنگلی" else "Forest green")), (3 to (if (isFa) "سفید" else "White"))).forEach { (choice, label) ->
+                    listOf(
+                        0 to (if (isFa) "آبی نیمه‌شب" else "Midnight blue"),
+                        1 to (if (isFa) "بنفش" else "Purple"),
+                        2 to (if (isFa) "سبز جنگلی" else "Forest green"),
+                        3 to (if (isFa) "سفید" else "White"),
+                        4 to (if (isFa) "مشکی نیمه‌شب" else "Midnight Black"),
+                        5 to (if (isFa) "صورتی" else "Pink"),
+                        6 to (if (isFa) "گیلاسی" else "Cherry"),
+                        7 to (if (isFa) "اقیانوسی عمیق" else "Deep Ocean"),
+                        8 to (if (isFa) "کهربایی" else "Amber"),
+                        9 to (if (isFa) "یشمی" else "Jade")
+                    ).forEach { (choice, label) ->
                         Row(Modifier.fillMaxWidth().clickable { changeBackground(choice) }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                             RadioButton(selected = bgChoice == choice, onClick = { changeBackground(choice) })
                             Text(label, color = TextWhite)
@@ -1264,7 +1351,7 @@ class MainActivity : ComponentActivity() {
             Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(if (isFa) "آیکون برنامه" else "App icon", color = TextWhite, fontWeight = FontWeight.Bold)
-                    Text(if (isFa) "یکی از چهار آیکون را انتخاب کنید. ممکن است لانچر گوشی کمی زمان برای به‌روزرسانی نیاز داشته باشد." else "Choose one of four launcher icons. Your launcher may take a moment to refresh.", color = Muted, style = MaterialTheme.typography.bodySmall)
+                    Text(if (isFa) "آیکون انتخاب‌شده ذخیره می‌شود و پس از باز کردن دوبارهٔ برنامه نباید به مینیمال برگردد. ممکن است لانچر برای به‌روزرسانی کمی زمان نیاز داشته باشد." else "Your selected launcher icon is saved and should persist after reopening the app. The launcher may take a moment to refresh.", color = Muted, style = MaterialTheme.typography.bodySmall)
                     listOf(if (isFa) "اصلی" else "Classic", if (isFa) "اقیانوسی" else "Ocean", if (isFa) "غروب" else "Sunset", if (isFa) "مینیمال" else "Minimal").forEachIndexed { index, label ->
                         Row(Modifier.fillMaxWidth().clickable { changeIcon(index) }.padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
                             RadioButton(selected = iconChoice == index, onClick = { changeIcon(index) })

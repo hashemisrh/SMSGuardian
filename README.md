@@ -52,3 +52,15 @@ Build fix v1.0.2: removed invalid references to `Manifest.permission.WRITE_SMS`.
 - Sending is no longer blocked only because `Telephony.Sms.getDefaultSmsPackage()` disagrees with the system Settings UI.
 - The app checks `SEND_SMS` permission, attempts the actual send when granted, and reports the actual Android send result or the specific exception.
 - This source revision must be built in GitHub Actions and tested on the target phone; it is not represented as device-tested.
+
+
+## Version 1.1.1 (incremental update from v25 / 1.1.0)
+
+- Preserves the v25 conversation-provider loading/refresh algorithm.
+- Adds Android Back handling and a visible back-to-chats item in the hamburger menu.
+- Persists launcher icon choice without resetting a saved selection to Minimal.
+- Adds Midnight Black, Pink, Cherry, Deep Ocean, Amber, and Jade themes.
+- Expands About feature list and documents long-SMS support (carrier limits apply).
+- Adds Donate / Support card-number dialog.
+- Updates the chat header tagline to “Messenger; But Lovely”.
+- Adds in-conversation text search; selecting a result scrolls to and highlights that message.
