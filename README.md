@@ -1,4 +1,4 @@
-## Version 1.1.0 (SMS Guardian v25)
+## Version 1.1.2 (SMS Guardian v27)
 
 - Main inbox now queries Android's SMS conversation summary view rather than taking a capped window of individual SMS rows.
 - Thread history is loaded on demand for the selected phone number.
@@ -15,7 +15,8 @@ Android SMS app project built with Kotlin and Jetpack Compose.
 ## Build with GitHub Actions
 1. Upload the **contents** of this `SMSGuardian` directory to the repository root, or keep this directory as `SMSGuardian/`.
 2. Commit and push to `main` or `master`.
-3. Open **Actions → Android APK** and download the `SMS-Guardian-debug-apk` artifact.
+3. Open **Actions → Android APK**. Download `SMS-Guardian-release-apk` for Myket/production (signed with the configured release keystore), or `SMS-Guardian-debug-apk` for testing.
+4. The release build requires repository secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD`. Keep the original release keystore; future updates must use the same signing key.
 
 ## Important Android requirements
 - The app must be granted the Android **default SMS app** role to receive `SMS_DELIVER` broadcasts and manage the SMS provider.
@@ -27,7 +28,16 @@ Android SMS app project built with Kotlin and Jetpack Compose.
 
 MMS parsing/receiving is not implemented in this version. SMS role availability and permission behavior can vary by Android version and device manufacturer.
 
-## Changes in this revision
+## Changes in this revision (v27)
+- Open the requested conversation from SMS notification taps and clear the tapped notification.
+- Accept recipients launched from external SMS intents (contacts/call history).
+- Select and delete multiple conversations at once.
+- Add a daily time window to automatic SMS forwarding, including overnight ranges.
+- Add separate chat-list and SMS-message font-size controls to the hamburger menu.
+- Preserve the conversation list scroll position when returning from a chat.
+- Increase Android versionCode to 12 and versionName to 1.1.2.
+
+## Changes in earlier revisions
 - Checks `SEND_SMS` at send time and requests it again if missing; the previous behavior could surface Android's `uid ... does not have ... SEND_SMS` exception after the permission had been denied.
 - Adds an actionable permission error message and logs the underlying exception for debugging.
 - Adds a phone-book picker next to the recipient number field.

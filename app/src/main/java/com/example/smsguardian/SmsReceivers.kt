@@ -70,10 +70,17 @@ private fun showSmsNotification(context: Context, sender: String, body: String) 
         }
         manager.createNotificationChannel(channel)
     }
-    val launchIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)
-    val pending = launchIntent?.let {
-        PendingIntent.getActivity(context, 7001, it, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+    val notificationId = (System.currentTimeMillis() % Int.MAX_VALUE).toInt().coerceAtLeast(1)
+    val launchIntent = Intent(context, MainActivity::class.java).apply {
+        action = Intent.ACTION_VIEW
+        putExtra("open_chat_number", sender)
+        putExtra("sms_notification_id", notificationId)
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
     }
+    val pending = PendingIntent.getActivity(
+        context, notificationId, launchIntent,
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
     if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
         Log.w("SMSGuardian", "Notification permission not granted; incoming SMS notification skipped")
         return
@@ -86,9 +93,9 @@ private fun showSmsNotification(context: Context, sender: String, body: String) 
         .setPriority(NotificationCompat.PRIORITY_HIGH)
         .setAutoCancel(true)
         .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-        .apply { if (pending != null) setContentIntent(pending) }
+        .setContentIntent(pending)
         .build()
-    NotificationManagerCompat.from(context).notify((System.currentTimeMillis() % Int.MAX_VALUE).toInt(), notification)
+    NotificationManagerCompat.from(context).notify(notificationId, notification)
 }
 
 /** MMS is declared so Android can offer the default SMS role; this starter app does not yet parse/store MMS. */

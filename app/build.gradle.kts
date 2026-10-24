@@ -1,4 +1,3 @@
-
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -15,11 +14,10 @@ android {
         applicationId = "com.example.smsguardian"
         minSdk = 23
         targetSdk = 35
-        versionCode = 11
-        versionName = "1.1.1"
+        versionCode = 12
+        versionName = "1.1.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
-
     signingConfigs {
         if (!releaseKeystorePath.isNullOrBlank()) {
             create("release") {
@@ -34,29 +32,18 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
-
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             if (!releaseKeystorePath.isNullOrBlank()) {
                 signingConfig = signingConfigs.getByName("release")
             }
         }
     }
-
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-
-    kotlinOptions {
-        jvmTarget = "17"
-    }
-
-    buildFeatures {
-        compose = true
-    }
+    kotlinOptions { jvmTarget = "17" }
+    buildFeatures { compose = true }
 }
 
 dependencies {

@@ -25,6 +25,25 @@ object SmsForwarding {
     const val NOTIFICATION_ID = 7341
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     fun isEnabled(c: Context) = prefs(c).getBoolean("enabled", false)
+
+    fun isWithinSchedule(c: Context, now: java.util.Calendar = java.util.Calendar.getInstance()): Boolean {
+        val p = prefs(c)
+        val start = parseTime(p.getString("start_time", "00:00").orEmpty()) ?: return false
+        val end = parseTime(p.getString("end_time", "23:59").orEmpty()) ?: return false
+        val current = now.get(java.util.Calendar.HOUR_OF_DAY) * 60 + now.get(java.util.Calendar.MINUTE)
+        return when {
+            start == end -> true
+            start < end -> current in start..end
+            else -> current >= start || current <= end // Overnight window, e.g. 22:00–06:00.
+        }
+    }
+
+    private fun parseTime(value: String): Int? {
+        if (!value.matches(Regex("^([01]\\d|2[0-3]):[0-5]\\d$"))) return null
+        val parts = value.split(":")
+        return parts[0].toInt() * 60 + parts[1].toInt()
+    }
+
     fun showStatus(c: Context, message: String = "SMS forwarding is enabled") {
         val nm = c.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= 26) nm.createNotificationChannel(NotificationChannel(CHANNEL, "وضعیت فوروارد پیامک", NotificationManager.IMPORTANCE_LOW))
@@ -45,7 +64,8 @@ object SmsForwarding {
 
 class SmsForwardingReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION || !SmsForwarding.isEnabled(context)) return
+        if (intent.action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION ||
+            !SmsForwarding.isEnabled(context) || !SmsForwarding.isWithinSchedule(context)) return
         val p = context.getSharedPreferences(SmsForwarding.PREFS, Context.MODE_PRIVATE)
         val messages = runCatching { Telephony.Sms.Intents.getMessagesFromIntent(intent) }.getOrDefault(emptyArray())
         if (messages.isEmpty()) return
