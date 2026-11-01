@@ -21,6 +21,7 @@ import android.os.Bundle
 import android.provider.Telephony
 import android.provider.ContactsContract
 import android.telephony.SmsManager
+import android.telephony.PhoneNumberUtils
 import android.telephony.SubscriptionManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -67,6 +68,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -776,8 +778,14 @@ class MainActivity : ComponentActivity() {
         var subId by remember { mutableStateOf<Int?>(null) }
         var sims by remember { mutableStateOf(emptyList<Pair<Int, String>>()) }
         var localRefresh by remember { mutableIntStateOf(0) }
-        val unreadCounts = remember(refresh, localRefresh, rows.size) { unreadSmsCounts() }
+        val unreadCounts = remember(refresh, localRefresh, rows.size, selectedNumber) { unreadSmsCounts() }
         val badgeColorChoice = getSharedPreferences("sms_guardian_settings", MODE_PRIVATE).getInt("unread_badge_color", 0)
+        val smsTextDirectionChoice = getSharedPreferences("sms_guardian_settings", MODE_PRIVATE).getInt("sms_text_direction", 0)
+        val smsTextDirection = when (smsTextDirectionChoice) {
+            1 -> TextDirection.Ltr
+            2 -> TextDirection.Rtl
+            else -> TextDirection.Content
+        }
         val badgeColor = listOf(Color(0xFFFF9800), Color(0xFFE53935), Color(0xFF1565C0), Color(0xFF00897B))[badgeColorChoice.coerceIn(0, 3)]
         LaunchedEffect(refresh, localRefresh) {
             rows = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { loadRows() }
@@ -791,9 +799,13 @@ class MainActivity : ComponentActivity() {
         }
         val currentNumber = selectedNumber
         BackHandler(enabled = currentNumber != null) {
-            currentNumber?.let { number -> getPreferences(MODE_PRIVATE).edit().putString(draftKey(number), threadMessage).apply() }
+            currentNumber?.let { number ->
+                getPreferences(MODE_PRIVATE).edit().putString(draftKey(number), threadMessage).apply()
+                markConversationRead(number)
+            }
             selectedNumber = null
             targetMessage = null
+            localRefresh++
         }
         if (currentNumber != null) {
             var loadedThreadRows by remember(currentNumber) { mutableStateOf<List<SmsRow>?>(null) }
@@ -810,7 +822,7 @@ class MainActivity : ComponentActivity() {
             val thread = loadedThreadRows ?: emptyList()
             Column(Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = { getPreferences(MODE_PRIVATE).edit().putString(draftKey(currentNumber), threadMessage).apply(); selectedNumber = null; targetMessage = null }) { Icon(Icons.Default.ArrowBack, contentDescription = if (isFa) "بازگشت" else "Back", tint = Cyan) }
+                    IconButton(onClick = { getPreferences(MODE_PRIVATE).edit().putString(draftKey(currentNumber), threadMessage).apply(); markConversationRead(currentNumber); selectedNumber = null; targetMessage = null; localRefresh++ }) { Icon(Icons.Default.ArrowBack, contentDescription = if (isFa) "بازگشت" else "Back", tint = Cyan) }
                     Column(Modifier.weight(1f)) {
                         Text(lookupContactName(currentNumber) ?: currentNumber, color = TextWhite, fontWeight = FontWeight.Bold)
                         Text(currentNumber, color = Muted, style = MaterialTheme.typography.labelSmall)
@@ -875,7 +887,7 @@ class MainActivity : ComponentActivity() {
                                 val linkText = remember(row.body, isTarget, TextWhite, Cyan) { linkedMessageText(row.body, Cyan) }
                                 ClickableText(
                                     text = linkText,
-                                    style = TextStyle(color = if (isTarget) Color(0xFF172033) else TextWhite, fontSize = 16.sp * smsFontScale),
+                                    style = TextStyle(color = if (isTarget) Color(0xFF172033) else TextWhite, fontSize = 16.sp * smsFontScale, textDirection = smsTextDirection),
                                     onClick = { offset ->
                                         linkText.getStringAnnotations("URL", offset, offset).firstOrNull()?.let { annotation ->
                                             runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(annotation.item))) }
@@ -1062,7 +1074,7 @@ class MainActivity : ComponentActivity() {
                                     Text(row.body, color = Muted, maxLines = 2, fontSize = 14.sp * chatFontScale)
                                     Text(SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(row.date)), color = Muted.copy(alpha = .7f), style = MaterialTheme.typography.labelSmall)
                                 }
-                                val unread = unreadCounts[row.address] ?: 0
+                                val unread = unreadCountForAddress(unreadCounts, row.address)
                                 if (unread > 0) {
                                     Box(Modifier.size(27.dp).background(badgeColor, CircleShape), contentAlignment = Alignment.Center) {
                                         Text(unread.coerceAtMost(99).toString(), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
@@ -1338,6 +1350,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun canonicalSmsAddress(value: String): String {
+        var digits = PhoneNumberUtils.normalizeNumber(value).filter { it.isDigit() }
+        if (digits.startsWith("0098")) digits = "0" + digits.drop(4)
+        else if (digits.startsWith("98") && digits.length >= 12) digits = "0" + digits.drop(2)
+        else if (digits.startsWith("+98")) digits = "0" + digits.drop(3)
+        return digits
+    }
+
+    private fun sameSmsAddress(first: String, second: String): Boolean {
+        val a = canonicalSmsAddress(first)
+        val b = canonicalSmsAddress(second)
+        return (a.isNotBlank() && a == b) || PhoneNumberUtils.compare(first, second)
+    }
+
     private fun unreadSmsCounts(): Map<String, Int> {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) return emptyMap()
         val counts = mutableMapOf<String, Int>()
@@ -1359,15 +1385,40 @@ class MainActivity : ComponentActivity() {
         return counts
     }
 
+    private fun unreadCountForAddress(counts: Map<String, Int>, address: String): Int =
+        counts.entries.filter { sameSmsAddress(it.key, address) }.sumOf { it.value }
+
     private fun markConversationRead(address: String) {
-        if (!isDefaultSmsApp()) return
+        if (!isDefaultSmsApp() || address.isBlank()) return
         runCatching {
-            val values = ContentValues().apply { put(Telephony.Sms.READ, 1); put(Telephony.Sms.SEEN, 1) }
-            contentResolver.update(
-                Telephony.Sms.CONTENT_URI, values,
-                "${Telephony.Sms.ADDRESS}=? AND ${Telephony.Sms.TYPE}=? AND ${Telephony.Sms.READ}=0",
-                arrayOf(address, Telephony.Sms.MESSAGE_TYPE_INBOX.toString())
-            )
+            // Do not assume the provider stores the same textual number format as the chat row.
+            // Collect the exact stored sender strings first, then update those rows.
+            val matchingAddresses = linkedSetOf<String>()
+            contentResolver.query(
+                Telephony.Sms.CONTENT_URI,
+                arrayOf(Telephony.Sms.ADDRESS),
+                "${Telephony.Sms.TYPE}=? AND ${Telephony.Sms.READ}=0",
+                arrayOf(Telephony.Sms.MESSAGE_TYPE_INBOX.toString()),
+                null
+            )?.use { cursor ->
+                val col = cursor.getColumnIndex(Telephony.Sms.ADDRESS)
+                while (cursor.moveToNext()) {
+                    val storedAddress = if (col >= 0) cursor.getString(col).orEmpty() else ""
+                    if (storedAddress.isNotBlank() && sameSmsAddress(storedAddress, address)) matchingAddresses.add(storedAddress)
+                }
+            }
+            matchingAddresses.forEach { storedAddress ->
+                val values = ContentValues().apply {
+                    put(Telephony.Sms.READ, 1)
+                    put(Telephony.Sms.SEEN, 1)
+                }
+                contentResolver.update(
+                    Telephony.Sms.CONTENT_URI,
+                    values,
+                    "${Telephony.Sms.ADDRESS}=? AND ${Telephony.Sms.TYPE}=? AND ${Telephony.Sms.READ}=0",
+                    arrayOf(storedAddress, Telephony.Sms.MESSAGE_TYPE_INBOX.toString())
+                )
+            }
         }.onFailure { android.util.Log.e("SMSGuardian", "Could not mark conversation read", it) }
     }
 
@@ -1603,6 +1654,29 @@ class MainActivity : ComponentActivity() {
                             }
                             Spacer(Modifier.width(10.dp))
                             Text(listOf(if (isFa) "نارنجی" else "Orange", if (isFa) "قرمز" else "Red", if (isFa) "آبی" else "Blue", if (isFa) "سبزآبی" else "Teal")[index], color = TextWhite)
+                        }
+                    }
+                }
+            }
+            var smsDirectionSetting by remember { mutableIntStateOf(smsPrefs.getInt("sms_text_direction", 0).coerceIn(0, 2)) }
+            Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(if (isFa) "جهت نمایش متن پیامک‌ها" else "SMS message text direction", color = TextWhite, fontWeight = FontWeight.Bold)
+                    Text(if (isFa) "جهت متن داخل حباب پیامک را مستقل از زبان منو انتخاب کن." else "Choose the direction of message text independently from the app language.", color = Muted, style = MaterialTheme.typography.bodySmall)
+                    listOf(
+                        0 to (if (isFa) "خودکار (بر اساس متن پیام)" else "Automatic (based on message text)"),
+                        1 to (if (isFa) "چپ به راست (LTR)" else "Left to right (LTR)"),
+                        2 to (if (isFa) "راست به چپ (RTL)" else "Right to left (RTL)")
+                    ).forEach { (value, label) ->
+                        Row(Modifier.fillMaxWidth().clickable {
+                            smsDirectionSetting = value
+                            smsPrefs.edit().putInt("sms_text_direction", value).apply()
+                        }.padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(selected = smsDirectionSetting == value, onClick = {
+                                smsDirectionSetting = value
+                                smsPrefs.edit().putInt("sms_text_direction", value).apply()
+                            })
+                            Text(label, color = TextWhite)
                         }
                     }
                 }
