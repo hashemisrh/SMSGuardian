@@ -1350,76 +1350,49 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun canonicalSmsAddress(value: String): String {
-        var digits = PhoneNumberUtils.normalizeNumber(value).filter { it.isDigit() }
-        if (digits.startsWith("0098")) digits = "0" + digits.drop(4)
-        else if (digits.startsWith("98") && digits.length >= 12) digits = "0" + digits.drop(2)
-        else if (digits.startsWith("+98")) digits = "0" + digits.drop(3)
-        return digits
-    }
-
-    private fun sameSmsAddress(first: String, second: String): Boolean {
-        val a = canonicalSmsAddress(first)
-        val b = canonicalSmsAddress(second)
-        return (a.isNotBlank() && a == b) || PhoneNumberUtils.compare(first, second)
-    }
+    private fun conversationLastVisitKey(address: String): String =
+        "conversation_last_visit:$address"
 
     private fun unreadSmsCounts(): Map<String, Int> {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) return emptyMap()
         val counts = mutableMapOf<String, Int>()
+        val preferences = getPreferences(MODE_PRIVATE)
         runCatching {
             contentResolver.query(
                 Telephony.Sms.CONTENT_URI,
-                arrayOf(Telephony.Sms.ADDRESS),
-                "${Telephony.Sms.READ}=0 AND ${Telephony.Sms.TYPE}=?",
+                arrayOf(Telephony.Sms.ADDRESS, Telephony.Sms.DATE, Telephony.Sms.READ),
+                "${Telephony.Sms.TYPE}=?",
                 arrayOf(Telephony.Sms.MESSAGE_TYPE_INBOX.toString()),
                 null
             )?.use { cursor ->
-                val col = cursor.getColumnIndex(Telephony.Sms.ADDRESS)
+                val addressColumn = cursor.getColumnIndex(Telephony.Sms.ADDRESS)
+                val dateColumn = cursor.getColumnIndex(Telephony.Sms.DATE)
+                val readColumn = cursor.getColumnIndex(Telephony.Sms.READ)
                 while (cursor.moveToNext()) {
-                    val address = if (col >= 0) cursor.getString(col).orEmpty() else ""
-                    if (address.isNotBlank()) counts[address] = (counts[address] ?: 0) + 1
+                    val address = if (addressColumn >= 0) cursor.getString(addressColumn).orEmpty() else ""
+                    val date = if (dateColumn >= 0) cursor.getLong(dateColumn) else 0L
+                    val lastVisit = preferences.getLong(conversationLastVisitKey(address), -1L)
+                    val isUnreadInProvider = readColumn >= 0 && cursor.getInt(readColumn) == 0
+                    val isNewSinceVisit = lastVisit >= 0L && date > lastVisit
+                    if (address.isBlank() || !(if (lastVisit >= 0L) isNewSinceVisit else isUnreadInProvider)) continue
+                    counts[address] = (counts[address] ?: 0) + 1
                 }
             }
-        }
+        }.onFailure { android.util.Log.e("SMSGuardian", "Could not calculate per-conversation unread counts", it) }
         return counts
     }
 
     private fun unreadCountForAddress(counts: Map<String, Int>, address: String): Int =
-        counts.entries.filter { sameSmsAddress(it.key, address) }.sumOf { it.value }
+        counts[address] ?: 0
 
     private fun markConversationRead(address: String) {
-        if (!isDefaultSmsApp() || address.isBlank()) return
-        runCatching {
-            // Do not assume the provider stores the same textual number format as the chat row.
-            // Collect the exact stored sender strings first, then update those rows.
-            val matchingAddresses = linkedSetOf<String>()
-            contentResolver.query(
-                Telephony.Sms.CONTENT_URI,
-                arrayOf(Telephony.Sms.ADDRESS),
-                "${Telephony.Sms.TYPE}=? AND ${Telephony.Sms.READ}=0",
-                arrayOf(Telephony.Sms.MESSAGE_TYPE_INBOX.toString()),
-                null
-            )?.use { cursor ->
-                val col = cursor.getColumnIndex(Telephony.Sms.ADDRESS)
-                while (cursor.moveToNext()) {
-                    val storedAddress = if (col >= 0) cursor.getString(col).orEmpty() else ""
-                    if (storedAddress.isNotBlank() && sameSmsAddress(storedAddress, address)) matchingAddresses.add(storedAddress)
-                }
-            }
-            matchingAddresses.forEach { storedAddress ->
-                val values = ContentValues().apply {
-                    put(Telephony.Sms.READ, 1)
-                    put(Telephony.Sms.SEEN, 1)
-                }
-                contentResolver.update(
-                    Telephony.Sms.CONTENT_URI,
-                    values,
-                    "${Telephony.Sms.ADDRESS}=? AND ${Telephony.Sms.TYPE}=? AND ${Telephony.Sms.READ}=0",
-                    arrayOf(storedAddress, Telephony.Sms.MESSAGE_TYPE_INBOX.toString())
-                )
-            }
-        }.onFailure { android.util.Log.e("SMSGuardian", "Could not mark conversation read", it) }
+        if (address.isBlank()) return
+        // This is an app-local read marker. It deliberately does not modify the Android
+        // SMS Provider, so it works even when SMSGuardian is not the default SMS app.
+        // Exact address matching keeps distinct provider addresses in separate chats.
+        getPreferences(MODE_PRIVATE).edit()
+            .putLong(conversationLastVisitKey(address), System.currentTimeMillis())
+            .apply()
     }
 
     private fun initialsFor(name: String): String {
