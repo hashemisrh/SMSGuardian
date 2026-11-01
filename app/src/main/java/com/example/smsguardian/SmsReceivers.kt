@@ -4,6 +4,8 @@ import android.content.BroadcastReceiver
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.app.Activity
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -27,13 +29,23 @@ class SmsDeliverReceiver : BroadcastReceiver() {
         if (messages.isEmpty()) return
         val sender = messages.firstOrNull()?.originatingAddress.orEmpty()
         val body = messages.joinToString(separator = "") { it.messageBody.orEmpty() }
+        val receivedAt = messages.firstOrNull()?.timestampMillis ?: System.currentTimeMillis()
         if (RuleStore.isBlocked(context, sender, body)) {
-            // As the default SMS handler, we intentionally do not insert blocked messages into the SMS provider.
+            RuleStore.archiveBlocked(context, sender, body, receivedAt)
             Log.i("SMSGuardian", "Filtered incoming SMS from ${sender.take(4)}…")
             return
         }
+        // Optional quick-copy: copy the first number-like sequence from an accepted SMS.
+        val settings = context.getSharedPreferences("sms_guardian_settings", Context.MODE_PRIVATE)
+        if (settings.getBoolean("auto_copy_sms_number", false)) {
+            val number = Regex("[0-9۰-۹٠-٩]+").find(body)?.value
+            if (!number.isNullOrBlank()) {
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("SMS number", number))
+            }
+        }
         runCatching {
-            val date = messages.firstOrNull()?.timestampMillis ?: System.currentTimeMillis()
+            val date = receivedAt
             val values = ContentValues().apply {
                 put(Telephony.Sms.ADDRESS, sender)
                 put(Telephony.Sms.BODY, body)

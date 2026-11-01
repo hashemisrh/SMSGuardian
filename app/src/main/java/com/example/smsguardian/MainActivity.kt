@@ -698,7 +698,7 @@ class MainActivity : ComponentActivity() {
                 IconButton(onClick = { menuExpanded = true }) { Icon(Icons.Default.Menu, contentDescription = if (isFa) "منو" else "Menu", tint = Cyan) }
                 DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
                     DropdownMenuItem(leadingIcon = { Icon(Icons.Default.ArrowBack, null) }, text = { Text(if (isFa) "بازگشت به گفتگوها" else "Back to chats") }, onClick = { menuExpanded = false; navigate("chats") })
-                    listOf("chats" to (if (isFa) "گفتگوها" else "Chats"), "rules" to (if (isFa) "قوانین بلاک" else "Blocking rules"), "forwarding" to (if (isFa) "فوروارد خودکار پیامک" else "SMS forwarding"), "settings" to (if (isFa) "تنظیمات" else "Settings"), "about" to (if (isFa) "درباره ما" else "About")).forEach { (target, label) ->
+                    listOf("chats" to (if (isFa) "گفتگوها" else "Chats"), "rules" to (if (isFa) "قوانین بلاک" else "Blocking rules"), "deleted" to (if (isFa) "حذف‌شده‌ها و بلاک‌شده‌ها" else "Deleted & blocked"), "forwarding" to (if (isFa) "فوروارد خودکار پیامک" else "SMS forwarding"), "settings" to (if (isFa) "تنظیمات" else "Settings"), "about" to (if (isFa) "درباره ما" else "About")).forEach { (target, label) ->
                         DropdownMenuItem(text = { Text(label) }, onClick = { menuExpanded = false; navigate(target) })
                     }
                     DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Settings, null) }, text = { Text(if (isFa) "اندازه قلم چت و پیامک" else "Chat and SMS font size") }, onClick = { menuExpanded = false; showFontSettings = true })
@@ -767,6 +767,7 @@ class MainActivity : ComponentActivity() {
         val conversationListState = androidx.compose.foundation.lazy.rememberLazyListState()
         LaunchedEffect(launchRecipient) {
             launchRecipient?.let { number ->
+                markConversationRead(number)
                 selectedNumber = number
                 showComposer = false
                 launchRecipient = null
@@ -775,6 +776,9 @@ class MainActivity : ComponentActivity() {
         var subId by remember { mutableStateOf<Int?>(null) }
         var sims by remember { mutableStateOf(emptyList<Pair<Int, String>>()) }
         var localRefresh by remember { mutableIntStateOf(0) }
+        val unreadCounts = remember(refresh, localRefresh, rows.size) { unreadSmsCounts() }
+        val badgeColorChoice = getSharedPreferences("sms_guardian_settings", MODE_PRIVATE).getInt("unread_badge_color", 0)
+        val badgeColor = listOf(Color(0xFFFF9800), Color(0xFFE53935), Color(0xFF1565C0), Color(0xFF00897B))[badgeColorChoice.coerceIn(0, 3)]
         LaunchedEffect(refresh, localRefresh) {
             rows = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { loadRows() }
             initialLoadComplete = true
@@ -1036,7 +1040,7 @@ class MainActivity : ComponentActivity() {
                             modifier = Modifier.fillMaxWidth().combinedClickable(
                                 onClick = {
                                     if (selectionMode) selectedConversations = if (isSelected) selectedConversations - row.address else selectedConversations + row.address
-                                    else { selectedNumber = row.address; targetMessage = if (appliedChatSearch.isNotBlank()) row else null; showComposer = false }
+                                    else { markConversationRead(row.address); selectedNumber = row.address; targetMessage = if (appliedChatSearch.isNotBlank()) row else null; showComposer = false; localRefresh++ }
                                 },
                                 onLongClick = {
                                     if (selectionMode) selectedConversations = if (isSelected) selectedConversations - row.address else selectedConversations + row.address
@@ -1057,6 +1061,13 @@ class MainActivity : ComponentActivity() {
                                     Text(displayName, color = TextWhite, fontWeight = FontWeight.SemiBold, fontSize = 16.sp * chatFontScale)
                                     Text(row.body, color = Muted, maxLines = 2, fontSize = 14.sp * chatFontScale)
                                     Text(SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(row.date)), color = Muted.copy(alpha = .7f), style = MaterialTheme.typography.labelSmall)
+                                }
+                                val unread = unreadCounts[row.address] ?: 0
+                                if (unread > 0) {
+                                    Box(Modifier.size(27.dp).background(badgeColor, CircleShape), contentAlignment = Alignment.Center) {
+                                        Text(unread.coerceAtMost(99).toString(), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                    Spacer(Modifier.width(6.dp))
                                 }
                                 IconButton(onClick = { runCatching { startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:${Uri.encode(row.address)}"))) } }) { Icon(Icons.Default.Call, contentDescription = if (isFa) "تماس" else "Call", tint = Cyan) }
                             }
@@ -1284,31 +1295,80 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable private fun DeletedMessagesPage(isFa: Boolean, refresh: Int, changed: () -> Unit) {
-        val messages = remember(refresh) { readDeletedMessages() }
+        val messages = remember(refresh) {
+            val deleted = readDeletedMessages().map { it to false }
+            val blocked = RuleStore.archivedBlocked(this@MainActivity).let { array ->
+                buildList {
+                    for (i in 0 until array.length()) {
+                        val item = array.optJSONObject(i) ?: continue
+                        add(SmsRow(item.optString("address"), item.optString("body"), item.optLong("date"), item.optInt("type", Telephony.Sms.MESSAGE_TYPE_INBOX)) to true)
+                    }
+                }
+            }
+            (deleted + blocked).sortedByDescending { it.first.date }
+        }
         Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
-            Text(if (isFa) "پیامک‌های حذف‌شده" else "Deleted messages", color = TextWhite, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.padding(vertical = 12.dp))
-            Text(if (isFa) "پیامک‌هایی که از این پس از داخل برنامه حذف شوند، اینجا نگهداری می‌شوند." else "Messages deleted from within the app from now on will be kept here.", color = Muted, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 12.dp))
+            Text(if (isFa) "پیامک‌های حذف‌شده و بلاک‌شده" else "Deleted & blocked messages", color = TextWhite, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.padding(vertical = 12.dp))
+            Text(if (isFa) "پیامک‌های حذف‌شده و پیامک‌های مسدودشده از این پس در این بخش نگهداری می‌شوند." else "Deleted and blocked messages are kept here.", color = Muted, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 12.dp))
             if (messages.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(if (isFa) "آرشیو پیامک‌های حذف‌شده خالی است." else "The deleted-message archive is empty.", color = Muted) }
             } else LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(messages, key = { "deleted-${it.address}-${it.date}-${it.body.hashCode()}" }) { row ->
+                items(messages, key = { "archive-${it.second}-${it.first.address}-${it.first.date}-${it.first.body.hashCode()}" }) { entry ->
+                    val row = entry.first
+                    val isBlocked = entry.second
                     Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text("${lookupContactName(row.address) ?: row.address} · ${SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(row.date))}", color = Cyan, fontWeight = FontWeight.SemiBold)
+                            Text("${if (isBlocked) { if (isFa) "مسدودشده" else "Blocked" } else { if (isFa) "حذف‌شده" else "Deleted" }} · ${lookupContactName(row.address) ?: row.address} · ${SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(row.date))}", color = Cyan, fontWeight = FontWeight.SemiBold)
                             Text(row.body, color = TextWhite)
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                TextButton(onClick = {
+                                if (!isBlocked) TextButton(onClick = {
                                     val ok = restoreDeletedMessage(row)
                                     android.widget.Toast.makeText(this@MainActivity, if (ok) { if (isFa) "پیامک بازیابی شد" else "Message restored" } else { if (isFa) "بازیابی ناموفق بود؛ برنامه باید پیام‌رسان پیش‌فرض باشد." else "Restore failed; the app must be the default SMS app." }, android.widget.Toast.LENGTH_LONG).show()
                                     changed()
                                 }) { Text(if (isFa) "بازیابی" else "Restore") }
-                                TextButton(onClick = { removeArchivedMessage(row); changed() }) { Text(if (isFa) "حذف از آرشیو" else "Remove from archive") }
+                                TextButton(onClick = {
+                                    if (isBlocked) RuleStore.removeArchivedBlocked(this@MainActivity, row.address, row.body, row.date) else removeArchivedMessage(row)
+                                    changed()
+                                }) { Text(if (isFa) "حذف از آرشیو" else "Remove from archive") }
                             }
                         }
                     }
                 }
             }
         }
+    }
+
+    private fun unreadSmsCounts(): Map<String, Int> {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) return emptyMap()
+        val counts = mutableMapOf<String, Int>()
+        runCatching {
+            contentResolver.query(
+                Telephony.Sms.CONTENT_URI,
+                arrayOf(Telephony.Sms.ADDRESS),
+                "${Telephony.Sms.READ}=0 AND ${Telephony.Sms.TYPE}=?",
+                arrayOf(Telephony.Sms.MESSAGE_TYPE_INBOX.toString()),
+                null
+            )?.use { cursor ->
+                val col = cursor.getColumnIndex(Telephony.Sms.ADDRESS)
+                while (cursor.moveToNext()) {
+                    val address = if (col >= 0) cursor.getString(col).orEmpty() else ""
+                    if (address.isNotBlank()) counts[address] = (counts[address] ?: 0) + 1
+                }
+            }
+        }
+        return counts
+    }
+
+    private fun markConversationRead(address: String) {
+        if (!isDefaultSmsApp()) return
+        runCatching {
+            val values = ContentValues().apply { put(Telephony.Sms.READ, 1); put(Telephony.Sms.SEEN, 1) }
+            contentResolver.update(
+                Telephony.Sms.CONTENT_URI, values,
+                "${Telephony.Sms.ADDRESS}=? AND ${Telephony.Sms.TYPE}=? AND ${Telephony.Sms.READ}=0",
+                arrayOf(address, Telephony.Sms.MESSAGE_TYPE_INBOX.toString())
+            )
+        }.onFailure { android.util.Log.e("SMSGuardian", "Could not mark conversation read", it) }
     }
 
     private fun initialsFor(name: String): String {
@@ -1334,7 +1394,7 @@ class MainActivity : ComponentActivity() {
                     }
                     OutlinedTextField(value, { value = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text(when (kind) { "word" -> if (isFa) "عبارت؛ مثلاً وام فوری" else "Phrase, e.g. instant loan"; "number" -> if (isFa) "شماره کامل" else "Full phone number"; else -> if (isFa) "سرشماره؛ مثلاً 3000*" else "Prefix, e.g. 3000*" }) })
                     Button(onClick = { when (kind) { "word" -> RuleStore.addWord(this@MainActivity, value); "number" -> RuleStore.addNumber(this@MainActivity, value); else -> RuleStore.addPrefix(this@MainActivity, value) }; value = ""; changed() }, modifier = Modifier.fillMaxWidth(), enabled = value.isNotBlank()) { Icon(Icons.Default.Add, null); Spacer(Modifier.width(6.dp)); Text(if (isFa) "افزودن قانون" else "Add rule") }
-                    Text(if (isFa) "با تطبیق کلمه، شماره فرستنده نیز خودکار مسدود می‌شود." else "When a keyword matches, the sender is automatically added to blocked numbers.", color = Muted, style = MaterialTheme.typography.bodySmall)
+                    Text(if (isFa) "قانون Prefix وقتی هر بخشی از شماره فرستنده شامل الگوی واردشده باشد، پیامک را بلاک می‌کند؛ پیش‌شماره‌های +98 و 0098 با 0 یکسان‌سازی می‌شوند. با تطبیق کلمه، شماره فرستنده نیز خودکار مسدود می‌شود." else "A prefix rule blocks when the sender number contains the entered digits anywhere. +98 and 0098 are normalized to the local 0 format. Keyword matches also block the sender.", color = Muted, style = MaterialTheme.typography.bodySmall)
                 }
             }
             Spacer(Modifier.height(14.dp))
@@ -1486,7 +1546,7 @@ class MainActivity : ComponentActivity() {
 
     @Composable private fun SettingsPage(isFa: Boolean, language: String, changeLanguage: (String) -> Unit, requestRole: () -> Unit, bgChoice: Int, changeBackground: (Int) -> Unit, iconChoice: Int, changeIcon: (Int) -> Unit) {
         val isDefault = Telephony.Sms.getDefaultSmsPackage(this) == packageName
-        Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Column(Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(if (isFa) "رنگ زمینه برنامه" else "App background color", color = TextWhite, fontWeight = FontWeight.Bold)
@@ -1505,6 +1565,44 @@ class MainActivity : ComponentActivity() {
                         Row(Modifier.fillMaxWidth().clickable { changeBackground(choice) }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                             RadioButton(selected = bgChoice == choice, onClick = { changeBackground(choice) })
                             Text(label, color = TextWhite)
+                        }
+                    }
+                }
+            }
+            val smsPrefs = getSharedPreferences("sms_guardian_settings", MODE_PRIVATE)
+            var autoCopyNumbers by remember { mutableStateOf(smsPrefs.getBoolean("auto_copy_sms_number", false)) }
+            var badgeColorSetting by remember { mutableIntStateOf(smsPrefs.getInt("unread_badge_color", 0).coerceIn(0, 3)) }
+            Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(if (isFa) "کپی خودکار عددهای داخل پیامک" else "Automatic number copying", color = TextWhite, fontWeight = FontWeight.Bold)
+                    Text(if (isFa) "با فعال‌سازی، اولین رشته عددی موجود در هر پیامک دریافتیِ غیرمسدودشده به حافظه موقت (Clipboard) کپی می‌شود." else "When enabled, the first number-like sequence in each accepted incoming SMS is copied to the clipboard.", color = Muted, style = MaterialTheme.typography.bodySmall)
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(if (isFa) "فعال‌سازی کپی خودکار" else "Enable automatic copying", color = TextWhite, modifier = Modifier.weight(1f))
+                        Switch(checked = autoCopyNumbers, onCheckedChange = {
+                            autoCopyNumbers = it
+                            smsPrefs.edit().putBoolean("auto_copy_sms_number", it).apply()
+                        })
+                    }
+                }
+            }
+            Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(if (isFa) "رنگ نشان پیامک‌های خوانده‌نشده" else "Unread-message badge color", color = TextWhite, fontWeight = FontWeight.Bold)
+                    Text(if (isFa) "رنگ دایره و عدد سفید برای خوانایی بهتر انتخاب شده است." else "The badge uses a contrasting white number for readability.", color = Muted, style = MaterialTheme.typography.bodySmall)
+                    listOf(Color(0xFFFF9800), Color(0xFFE53935), Color(0xFF1565C0), Color(0xFF00897B)).forEachIndexed { index, color ->
+                        Row(Modifier.fillMaxWidth().clickable {
+                            badgeColorSetting = index
+                            smsPrefs.edit().putInt("unread_badge_color", index).apply()
+                        }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(selected = badgeColorSetting == index, onClick = {
+                                badgeColorSetting = index
+                                smsPrefs.edit().putInt("unread_badge_color", index).apply()
+                            })
+                            Box(Modifier.size(28.dp).background(color, CircleShape), contentAlignment = Alignment.Center) {
+                                Text("3", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            Text(listOf(if (isFa) "نارنجی" else "Orange", if (isFa) "قرمز" else "Red", if (isFa) "آبی" else "Blue", if (isFa) "سبزآبی" else "Teal")[index], color = TextWhite)
                         }
                     }
                 }
