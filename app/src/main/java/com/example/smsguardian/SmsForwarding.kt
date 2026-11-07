@@ -51,7 +51,7 @@ object SmsForwarding {
         val pi = launch?.let { PendingIntent.getActivity(c, NOTIFICATION_ID, it, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE) }
         val notification = NotificationCompat.Builder(c, CHANNEL)
             .setSmallIcon(R.drawable.ic_notification_minimal)
-            .setContentTitle("SMS Guardian · فوروارد پیامک")
+            .setContentTitle("مدیریت پیامک · فوروارد پیامک")
             .setContentText(message)
             .setOngoing(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)

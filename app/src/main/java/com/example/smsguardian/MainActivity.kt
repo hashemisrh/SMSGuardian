@@ -190,7 +190,7 @@ class MainActivity : ComponentActivity() {
             android.util.Log.e("SMSGuardian", "SMS permissions still denied: ${deniedSms.joinToString()}; default=${isDefaultSmsApp()}")
             android.widget.Toast.makeText(
                 this,
-                "دسترسی پیامک داده نشده است. ابتدا SMS Guardian را از تنظیمات برنامه‌های پیش‌فرض به‌عنوان برنامه پیامک انتخاب کنید. اگر انتخاب شده ولی دسترسی‌ها رد می‌شوند، این APK هنوز مجوزهای لازم نقش پیامک را نگرفته است.",
+                "دسترسی پیامک داده نشده است. ابتدا مدیریت پیامک را از تنظیمات برنامه‌های پیش‌فرض به‌عنوان برنامه پیامک انتخاب کنید. اگر انتخاب شده ولی دسترسی‌ها رد می‌شوند، این APK هنوز مجوزهای لازم نقش پیامک را نگرفته است.",
                 android.widget.Toast.LENGTH_LONG
             ).show()
         }
@@ -212,7 +212,7 @@ class MainActivity : ComponentActivity() {
             requestNonSmsPermissions()
             smsRoleRefreshSignal++
         } else {
-            android.widget.Toast.makeText(this, "برای دریافت و مدیریت پیامک‌ها، SMS Guardian را در تنظیمات گوشی به‌عنوان برنامه پیامک پیش‌فرض انتخاب کنید.", android.widget.Toast.LENGTH_LONG).show()
+            android.widget.Toast.makeText(this, "برای دریافت و مدیریت پیامک‌ها، مدیریت پیامک را در تنظیمات گوشی به‌عنوان برنامه پیامک پیش‌فرض انتخاب کنید.", android.widget.Toast.LENGTH_LONG).show()
         }
     }
 
@@ -709,7 +709,7 @@ class MainActivity : ComponentActivity() {
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text("SMS Guardian", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = TextWhite)
+                Text("مدیریت پیامک", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = TextWhite)
                 Text(if (page == "chats") "Messenger; But Lovely" else if (page == "rules") { if (isFa) "مدیریت قوانین هوشمند" else "Smart filtering rules" } else if (page == "forwarding") { if (isFa) "ارسال خودکار پیامک‌های مطابق شرط" else "Automatically forward matching SMS" } else { if (isFa) "شخصی‌سازی برنامه" else "Personalize your app" }, color = Muted, style = MaterialTheme.typography.bodySmall)
             }
             Icon(Icons.Default.Language, null, tint = Cyan, modifier = Modifier.clickable(onClick = toggleLanguage).padding(8.dp))
@@ -1450,7 +1450,7 @@ class MainActivity : ComponentActivity() {
             Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(24.dp), modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.fillMaxWidth().background(Brush.linearGradient(listOf(Color(0xFF173C59), Color(0xFF10283F)))).padding(22.dp), verticalArrangement = Arrangement.spacedBy(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Box(Modifier.size(76.dp).background(Brush.linearGradient(listOf(Cyan, Color(0xFF356BCE))), CircleShape), contentAlignment = Alignment.Center) { Icon(Icons.Default.Chat, null, tint = Color.White, modifier = Modifier.size(38.dp)) }
-                    Text("SMS Guardian", color = Color.White, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                    Text("مدیریت پیامک", color = Color.White, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                     Text(if (isFa) "مدیریت هوشمند پیامک‌ها، فیلتر و کنترل گفتگوها" else "Smart SMS management, filtering and conversation control", color = Color.White.copy(alpha = 0.88f))
                     Text("Version ${runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: "1.1.1"}", color = Color.White.copy(alpha = 0.85f), style = MaterialTheme.typography.labelMedium)
                     AssistChip(onClick = {}, colors = AssistChipDefaults.assistChipColors(containerColor = Color.White.copy(alpha = 0.14f), labelColor = Color.White, leadingIconContentColor = Color.White), label = { Text(if (isFa) "حریم خصوصی؛ اطلاعات روی دستگاه شما" else "Privacy-minded · on-device rules") }, leadingIcon = { Icon(Icons.Default.Settings, null) })

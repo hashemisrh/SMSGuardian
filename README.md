@@ -1,4 +1,4 @@
-## Version 1.1.2 (SMS Guardian v27)
+## Version 1.1.2 (مدیریت پیامک v27)
 
 - Main inbox now queries Android's SMS conversation summary view rather than taking a capped window of individual SMS rows.
 - Thread history is loaded on demand for the selected phone number.
@@ -8,7 +8,7 @@
 
 Build/test note: this source archive has not been compiled on this host because Gradle/Gradle wrapper is unavailable here.
 
-# SMS Guardian
+# مدیریت پیامک (SMS Manager)
 
 Android SMS app project built with Kotlin and Jetpack Compose.
 
@@ -42,7 +42,7 @@ MMS parsing/receiving is not implemented in this version. SMS role availability 
 - Adds an actionable permission error message and logs the underlying exception for debugging.
 - Adds a phone-book picker next to the recipient number field.
 - Adds a hamburger navigation menu and an About screen with developer details.
-- Keeps exact-number, keyword, and sender-prefix filtering rules stored locally. For automatic filtering of incoming SMS, select SMS Guardian as the system default SMS app and grant the requested permissions.
+- Keeps exact-number, keyword, and sender-prefix filtering rules stored locally. For automatic filtering of incoming SMS, select مدیریت پیامک as the system default SMS app and grant the requested permissions.
 
 ## Important testing note
 This source archive was updated, but an Android build could not be run in this environment because Gradle is not installed. Use the included GitHub Actions workflow to compile it and download the APK artifact. Confirm permissions and SMS behavior on a physical device with an active SIM; emulator/build success alone cannot verify carrier delivery.
@@ -50,9 +50,9 @@ This source archive was updated, but an Android build could not be run in this e
 
 ## First launch and SMS access (important)
 
-On Android 10 and newer, the app requests the **default SMS app role first**. Accept the Android system dialog and select **SMS Guardian** as the default SMS app. Only after that will the app request unrelated permissions such as Contacts and Phone state. This order is required because SMS permissions are restricted to the default SMS handler on modern Android. If the system dialog is declined, open **Settings → Apps → Default apps → SMS app** and select SMS Guardian, then reopen the app.
+On Android 10 and newer, the app requests the **default SMS app role first**. Accept the Android system dialog and select **مدیریت پیامک** as the default SMS app. Only after that will the app request unrelated permissions such as Contacts and Phone state. This order is required because SMS permissions are restricted to the default SMS handler on modern Android. If the system dialog is declined, open **Settings → Apps → Default apps → SMS app** and select مدیریت پیامک, then reopen the app.
 
-If Android still reports that SMS access was denied after SMS Guardian is selected as the default SMS app, remove the older installation, install the newly built APK, and accept the system default-SMS prompt. SMS delivery and sending depend on Android granting the SMS role and on an active SIM/mobile service; they cannot be bypassed by requesting `SEND_SMS` alone.
+If Android still reports that SMS access was denied after مدیریت پیامک is selected as the default SMS app, remove the older installation, install the newly built APK, and accept the system default-SMS prompt. SMS delivery and sending depend on Android granting the SMS role and on an active SIM/mobile service; they cannot be bypassed by requesting `SEND_SMS` alone.
 
 
 Build fix v1.0.2: removed invalid references to `Manifest.permission.WRITE_SMS`. Android SDK does not expose this as a runtime permission constant; the previous references caused Kotlin compilation to fail. The app no longer requests/checks WRITE_SMS as a runtime permission.
@@ -76,11 +76,8 @@ Build fix v1.0.2: removed invalid references to `Manifest.permission.WRITE_SMS`.
 - Adds in-conversation text search; selecting a result scrolls to and highlights that message.
 
 
-## انتشار در مایکت
-- عنوان برنامه در لانچر اندروید و همه میان‌برهای لانچر با عنوان «مدیریت پیامک | SMS Guardian — ساده و حرفه‌ای» یکسان شده است.
-- آیکون یکسان برنامه در نسخه نصب‌شده و فایل مستقل `SMS_Guardian_Icon.png` ارائه شده است.
-- نسخه برنامه برای انتشار بعدی به `1.1.5` و `versionCode=15` افزایش یافته است.
-- گردش‌کار GitHub Actions خروجی Debug و Release را می‌سازد. اگر کلید امضای Release در Secrets تعریف نشده باشد، Release به‌صورت unsigned ساخته می‌شود؛ برای انتشار در مایکت باید APK را با همان کلید قبلی برنامه امضا کنید.
-
-### فایل خروجی
-در GitHub به مسیر Actions بروید، اجرای workflow با نام Android APK را باز کنید و از بخش Artifacts فایل `SMS-Guardian-release-apk` را دریافت کنید.
+## Myket metadata alignment (v1.1.5)
+- Unified the installed launcher/application label to «مدیریت پیامک».
+- Replaced the launcher icon with one classic SMS chat-and-envelope icon (no shield).
+- The launcher aliases now all reference the same icon and app label so changing a saved icon selection cannot cause a Myket listing/install icon mismatch.
+- Suggested short English name: SMS Manager.
