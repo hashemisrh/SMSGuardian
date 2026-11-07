@@ -74,3 +74,13 @@ Build fix v1.0.2: removed invalid references to `Manifest.permission.WRITE_SMS`.
 - Adds Donate / Support card-number dialog.
 - Updates the chat header tagline to “Messenger; But Lovely”.
 - Adds in-conversation text search; selecting a result scrolls to and highlights that message.
+
+
+## انتشار در مایکت
+- عنوان برنامه در لانچر اندروید و همه میان‌برهای لانچر با عنوان «مدیریت پیامک | SMS Guardian — ساده و حرفه‌ای» یکسان شده است.
+- آیکون یکسان برنامه در نسخه نصب‌شده و فایل مستقل `SMS_Guardian_Icon.png` ارائه شده است.
+- نسخه برنامه برای انتشار بعدی به `1.1.5` و `versionCode=15` افزایش یافته است.
+- گردش‌کار GitHub Actions خروجی Debug و Release را می‌سازد. اگر کلید امضای Release در Secrets تعریف نشده باشد، Release به‌صورت unsigned ساخته می‌شود؛ برای انتشار در مایکت باید APK را با همان کلید قبلی برنامه امضا کنید.
+
+### فایل خروجی
+در GitHub به مسیر Actions بروید، اجرای workflow با نام Android APK را باز کنید و از بخش Artifacts فایل `SMS-Guardian-release-apk` را دریافت کنید.
