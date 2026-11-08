@@ -1,3 +1,21 @@
+## Version 1.2.0 — conversation organization and usability
+
+- Fixed launcher-icon switching by enabling the selected activity alias before disabling the previous alias.
+- Set the transparent-background Minimal vector icon as the installed app/APK default; each launcher alias now points to its own icon asset.
+- Added user-selected pinned conversations, sorted above regular chats.
+- Added custom conversation pages (for example Family, Friends, Work) and moving chats into a page.
+- Added pinned home-screen shortcuts for individual conversations on Android 8+.
+- Tapping anywhere on a message bubble opens its copy/forward/edit actions.
+- Added multi-selection and bulk removal for deleted and blocked archive entries.
+- Added an independent temporary enable/disable switch for each configured SMS-forwarding destination.
+- The new-message recipient field accepts multiple phone numbers separated by commas or semicolons; a contact picker selection can also be accumulated, and the SMS is sent separately to each selected recipient.
+- Expanded the About page with the new features.
+
+**Important group-SMS limitation:** Android's `SmsManager` sends a standard SMS to one destination at a time. This revision sends the same text separately to each selected number. It does not create a shared group-MMS conversation/thread; true group messaging requires MMS/group-thread support, which this project did not previously implement.
+
+## Build and verification
+The source archive is prepared for the existing GitHub Actions workflow. This environment does not have Gradle/Android SDK configured, so a full Android APK build and device test could not be run here. Push the project to GitHub and run **Actions → Android APK**. Test icon changes, pinned shortcuts, SMS sending, and forwarding on a physical device.
+
 ## Version 1.1.2 (مدیریت پیامک v27)
 
 - Main inbox now queries Android's SMS conversation summary view rather than taking a capped window of individual SMS rows.

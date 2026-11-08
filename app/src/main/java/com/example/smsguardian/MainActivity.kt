@@ -37,11 +37,15 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AddCircle
+import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Close
@@ -56,7 +60,6 @@ import androidx.compose.material.icons.filled.Contacts
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Palette
-import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
@@ -386,52 +389,15 @@ class MainActivity : ComponentActivity() {
 
     private fun setLauncherIcon(choice: Int) {
         val aliases = listOf(".IconClassic", ".IconOcean", ".IconSunset", ".IconMinimal")
-        val selectedIndex = choice.coerceIn(0, aliases.lastIndex)
         val pm = packageManager
-        val components = aliases.map { alias ->
-            android.content.ComponentName(this, packageName + alias)
+        val selected = choice.coerceIn(0, aliases.lastIndex)
+        // Enable the new launcher entry first: disabling the active alias first can
+        // make some launchers close/restart the app while no launcher entry is active.
+        pm.setComponentEnabledSetting(android.content.ComponentName(this, packageName + aliases[selected]), PackageManager.COMPONENT_ENABLED_STATE_ENABLED, PackageManager.DONT_KILL_APP)
+        aliases.forEachIndexed { index, alias ->
+            if (index != selected) pm.setComponentEnabledSetting(android.content.ComponentName(this, packageName + alias), PackageManager.COMPONENT_ENABLED_STATE_DISABLED, PackageManager.DONT_KILL_APP)
         }
-
-        // Change the launcher entry as one atomic operation on Android 13+.
-        // On older versions, enable the new entry BEFORE disabling the old ones;
-        // disabling the currently-used launcher alias first can make some launchers
-        // terminate/relaunch the app while the icon is being changed.
-        try {
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-                val settings = components.mapIndexed { index, component ->
-                    PackageManager.ComponentEnabledSetting(
-                        component,
-                        if (index == selectedIndex) PackageManager.COMPONENT_ENABLED_STATE_ENABLED
-                        else PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
-                        PackageManager.DONT_KILL_APP
-                    )
-                }
-                pm.setComponentEnabledSettings(settings)
-            } else {
-                pm.setComponentEnabledSetting(
-                    components[selectedIndex],
-                    PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
-                    PackageManager.DONT_KILL_APP
-                )
-                components.forEachIndexed { index, component ->
-                    if (index != selectedIndex) {
-                        pm.setComponentEnabledSetting(
-                            component,
-                            PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
-                            PackageManager.DONT_KILL_APP
-                        )
-                    }
-                }
-            }
-            getPreferences(MODE_PRIVATE).edit().putInt("launcher_icon_choice", selectedIndex).apply()
-        } catch (error: Exception) {
-            android.util.Log.e("SMSGuardian", "Unable to update launcher icon", error)
-            android.widget.Toast.makeText(
-                this,
-                getString(R.string.app_name) + ": " + error.localizedMessage.orEmpty(),
-                android.widget.Toast.LENGTH_LONG
-            ).show()
-        }
+        getPreferences(MODE_PRIVATE).edit().putInt("launcher_icon_choice", selected).apply()
     }
 
     private fun draftKey(address: String): String = "sms_draft_" + address.filter { it.isLetterOrDigit() || it == '+' }
@@ -463,16 +429,13 @@ class MainActivity : ComponentActivity() {
         // Keep only one row per address for the main list. Do not build a List<SmsRow>
         // for every thread: with hundreds of conversations and a large history this
         // was the main source of avoidable allocation and repeated work.
-        // Group international and local representations of the same Iranian number
-        // (for example +98912… and 0912…) into one logical conversation.
-        val latestByCanonicalAddress = HashMap<String, SmsRow>(rows.size.coerceAtMost(4096))
+        val latestByAddress = HashMap<String, SmsRow>(rows.size.coerceAtMost(4096))
         for (row in rows) {
             if (row.address.isBlank()) continue
-            val key = RuleStore.normalizeNumber(row.address).ifBlank { row.address.trim() }
-            val previous = latestByCanonicalAddress[key]
-            if (previous == null || row.date > previous.date) latestByCanonicalAddress[key] = row
+            val previous = latestByAddress[row.address]
+            if (previous == null || row.date > previous.date) latestByAddress[row.address] = row
         }
-        return latestByCanonicalAddress.values.sortedByDescending { it.date }
+        return latestByAddress.values.sortedByDescending { it.date }
     }
 
     private fun getConversationPreviews(rows: List<SmsRow>): List<ConversationPreview> {
@@ -560,37 +523,6 @@ class MainActivity : ComponentActivity() {
             }
         }
         return rows
-    }
-
-    /**
-     * Resolve provider thread addresses first, then load only the matching exact-address
-     * histories. This merges local/international number formats without scanning the
-     * entire SMS database every time a chat is opened.
-     */
-    private fun querySmsRowsForConversation(number: String): List<SmsRow> {
-        val canonical = RuleStore.normalizeNumber(number).ifBlank { number.trim() }
-        val addresses = linkedSetOf(number)
-        var providerLookupSucceeded = false
-        runCatching {
-            contentResolver.query(
-                Telephony.Sms.Conversations.CONTENT_URI,
-                arrayOf(Telephony.Sms.ADDRESS),
-                null, null, null
-            )?.use { cursor ->
-                val index = cursor.getColumnIndex(Telephony.Sms.ADDRESS)
-                if (index >= 0) {
-                    providerLookupSucceeded = true
-                    while (cursor.moveToNext()) {
-                        val address = cursor.getString(index).orEmpty()
-                        if (address.isNotBlank() && RuleStore.normalizeNumber(address) == canonical) addresses.add(address)
-                    }
-                }
-            }
-        }
-        if (!providerLookupSucceeded) {
-            return querySmsRowsForConversation(number)
-        }
-        return addresses.flatMap { querySmsRows(address = it) }.sortedBy { it.date }
     }
 
     /**
@@ -711,15 +643,12 @@ class MainActivity : ComponentActivity() {
             // Minimal is the default only on a truly fresh install. Never overwrite
             // a previously saved user's launcher icon when the app starts/upgrades.
             if (!migration.getBoolean("minimal_icon_default_applied", false)) {
-                // The manifest already enables Minimal on a fresh install. Apply a
-                // saved pre-existing choice only once during migration. PackageManager
-                // component states survive process death, so changing aliases on every
-                // launch is unnecessary and can disrupt some device launchers.
-                launcherIconChoice = migration.getInt("launcher_icon_choice", 3).coerceIn(0, 3)
-                if (migration.contains("launcher_icon_choice")) {
-                    setLauncherIcon(launcherIconChoice)
+                if (!migration.contains("launcher_icon_choice")) {
+                    setLauncherIcon(3)
+                    launcherIconChoice = 3
                 } else {
-                    migration.edit().putInt("launcher_icon_choice", 3).apply()
+                    launcherIconChoice = migration.getInt("launcher_icon_choice", 3).coerceIn(0, 3)
+                    setLauncherIcon(launcherIconChoice)
                 }
                 migration.edit().putBoolean("minimal_icon_default_applied", true).apply()
             } else {
@@ -827,9 +756,12 @@ class MainActivity : ComponentActivity() {
         var searchExpanded by remember { mutableStateOf(false) }
         var selectionMode by remember { mutableStateOf(false) }
         var selectedConversations by remember { mutableStateOf(setOf<String>()) }
-        var pinnedConversations by remember {
-            mutableStateOf(getPreferences(MODE_PRIVATE).getStringSet("pinned_conversations", emptySet())?.toSet() ?: emptySet())
-        }
+        val chatPrefs = getSharedPreferences("sms_guardian_chat_organization", MODE_PRIVATE)
+        var pinnedChats by remember { mutableStateOf(chatPrefs.getStringSet("pinned_chats", emptySet())?.toSet() ?: emptySet()) }
+        var chatFolders by remember { mutableStateOf(chatPrefs.getString("chat_folders", "") ?: "") }
+        var activeFolder by remember { mutableStateOf("") }
+        var folderDialog by remember { mutableStateOf(false) }
+        var folderNameInput by remember { mutableStateOf("") }
         var showComposer by remember { mutableStateOf(false) }
         var targetMessage by remember { mutableStateOf<SmsRow?>(null) }
         var appliedChatSearch by remember { mutableStateOf("") }
@@ -897,7 +829,7 @@ class MainActivity : ComponentActivity() {
             }
             LaunchedEffect(currentNumber, refresh, localRefresh) {
                 loadedThreadRows = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    querySmsRowsForConversation(currentNumber)
+                    querySmsRows(address = currentNumber).sortedBy { it.date }
                 }
             }
             val thread = loadedThreadRows ?: emptyList()
@@ -970,11 +902,10 @@ class MainActivity : ComponentActivity() {
                                     text = linkText,
                                     style = TextStyle(color = if (isTarget) Color(0xFF172033) else TextWhite, fontSize = 16.sp * smsFontScale, textDirection = smsTextDirection),
                                     onClick = { offset ->
-                                        val annotation = linkText.getStringAnnotations("URL", offset, offset).firstOrNull()
-                                        if (annotation != null) {
+                                        linkText.getStringAnnotations("URL", offset, offset).firstOrNull()?.let { annotation ->
                                             runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(annotation.item))) }
                                                 .onFailure { android.widget.Toast.makeText(this@MainActivity, if (isFa) "باز کردن لینک ممکن نشد" else "Could not open link", android.widget.Toast.LENGTH_SHORT).show() }
-                                        } else messageMenu = true
+                                        }
                                     }
                                 )
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -1040,7 +971,12 @@ class MainActivity : ComponentActivity() {
                             Column(Modifier.weight(1f)) {
                                 OutlinedTextField(
                                     value = destination,
-                                    onValueChange = { typed -> destination = typed; recipientNumber = ""; suggestions = findContactSuggestions(typed); suggestionsExpanded = typed.isNotBlank() && suggestions.isNotEmpty() },
+                                    onValueChange = { typed ->
+                                        destination = typed
+                                        recipientNumber = typed.split(',', ';', '\n').map { it.trim() }.filter { it.isNotBlank() && it.any(Char::isDigit) }.distinct().joinToString(";")
+                                        suggestions = findContactSuggestions(typed.substringAfterLast(',').substringAfterLast(';').trim())
+                                        suggestionsExpanded = typed.isNotBlank() && suggestions.isNotEmpty()
+                                    },
                                     modifier = Modifier.fillMaxWidth(),
                                     label = { Text(if (isFa) "نام یا شماره گیرنده" else "Recipient name or number") },
                                     singleLine = true,
@@ -1057,7 +993,12 @@ class MainActivity : ComponentActivity() {
                                         LazyColumn(modifier = Modifier.heightIn(max = 220.dp)) {
                                             items(suggestions.take(8), key = { "${it.number}-${it.name}" }) { item ->
                                                 Column(
-                                                    Modifier.fillMaxWidth().clickable { destination = item.name.ifBlank { item.number }; recipientNumber = item.number; suggestionsExpanded = false }
+                                                    Modifier.fillMaxWidth().clickable {
+                                                        val current = recipientNumber.split(';').filter { it.isNotBlank() }
+                                                        recipientNumber = (current + item.number).distinct().joinToString(";")
+                                                        destination = (current + item.number).distinct().joinToString(", ") { lookupContactName(it) ?: it }
+                                                        suggestionsExpanded = false
+                                                    }
                                                         .padding(horizontal = 12.dp, vertical = 10.dp)
                                                 ) {
                                                     Text(item.name.ifBlank { item.number }, color = TextWhite, fontWeight = FontWeight.SemiBold)
@@ -1070,7 +1011,12 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                             IconButton(onClick = {
-                                contactCallback = { picked -> recipientNumber = picked; destination = lookupContactName(picked) ?: picked; suggestionsExpanded = false }
+                                contactCallback = { picked ->
+                                    val current = recipientNumber.split(';').filter { it.isNotBlank() }
+                                    recipientNumber = (current + picked).distinct().joinToString(";")
+                                    destination = (current + picked).distinct().joinToString(", ") { lookupContactName(it) ?: it }
+                                    suggestionsExpanded = false
+                                }
                                 contactPicker.launch(Intent(Intent.ACTION_PICK, ContactsContract.CommonDataKinds.Phone.CONTENT_URI))
                             }) { Icon(Icons.Default.Contacts, contentDescription = if (isFa) "انتخاب از دفترچه تلفن" else "Choose contact", tint = Cyan) }
                         }
@@ -1079,7 +1025,16 @@ class MainActivity : ComponentActivity() {
                             Text(if (isFa) "سیم‌کارت ارسال" else "Send using SIM", color = Muted, style = MaterialTheme.typography.labelMedium)
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { sims.forEach { (id, label) -> FilterChip(selected = subId == id, onClick = { subId = id }, label = { Text(label) }) } }
                         }
-                        Button(onClick = { val target = recipientNumber.ifBlank { destination.trim() }; val textToSend = message; send(target, textToSend, subId); selectedNumber = target; threadMessage = ""; destination = ""; recipientNumber = ""; message = ""; suggestionsExpanded = false; localRefresh++ }, modifier = Modifier.fillMaxWidth(), enabled = (recipientNumber.isNotBlank() || destination.isNotBlank()) && message.isNotBlank()) {
+                        Button(onClick = {
+                            val targets = recipientNumber.split(';', ',', '\n').map { it.trim() }.filter { it.isNotBlank() && it.any(Char::isDigit) }.distinct()
+                            if (targets.isEmpty()) android.widget.Toast.makeText(this@MainActivity, if (isFa) "شماره معتبر وارد کنید." else "Enter a valid recipient number.", android.widget.Toast.LENGTH_SHORT).show()
+                            else {
+                                targets.forEach { send(it, message, subId) }
+                                selectedNumber = targets.first()
+                                threadMessage = ""; destination = ""; recipientNumber = ""; message = ""; suggestionsExpanded = false; localRefresh++
+                                android.widget.Toast.makeText(this@MainActivity, if (isFa) "پیام برای ${targets.size} مخاطب ارسال شد." else "SMS sent to ${targets.size} recipients.", android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                        }, modifier = Modifier.fillMaxWidth(), enabled = (recipientNumber.isNotBlank() || destination.isNotBlank()) && message.isNotBlank()) {
                             Icon(Icons.Default.Send, null); Spacer(Modifier.width(8.dp)); Text(if (isFa) "ارسال پیامک" else "Send SMS")
                         }
                     }
@@ -1104,15 +1059,13 @@ class MainActivity : ComponentActivity() {
                     conversations = if (query.isBlank()) {
                         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
                             groupedConversations.map { it.latestMessage }
-                                .sortedWith(compareByDescending<SmsRow> { RuleStore.normalizeNumber(it.address) in pinnedConversations }
-                                    .thenByDescending { it.date })
                         }
                     } else {
                         val allRows = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { loadAllSmsRows() }
                         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
                             allRows.groupBy { it.address }.mapNotNull { (address, messages) ->
                                 val name = lookupContactName(address)
-                                val matched = if (messages.any { it.address.contains(query, ignoreCase = true) } || name?.contains(query, ignoreCase = true) == true)
+                                val matched = if (address.contains(query, ignoreCase = true) || name?.contains(query, ignoreCase = true) == true)
                                     messages.maxByOrNull { it.date }
                                 else messages.asSequence().filter { it.body.contains(query, ignoreCase = true) }.maxByOrNull { it.date }
                                 matched
@@ -1120,17 +1073,40 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
+                val folderNames = chatFolders.split("|").map { it.trim() }.filter { it.isNotBlank() }.distinct()
+                if (selectedConversations.isNotEmpty() && folderNames.isNotEmpty()) {
+                    var moveDialog by remember { mutableStateOf(false) }
+                    TextButton(onClick = { moveDialog = true }, modifier = Modifier.fillMaxWidth()) {
+                        Icon(Icons.Default.Folder, null); Text(if (isFa) "انتقال ${selectedConversations.size} گفتگو به صفحه" else "Move ${selectedConversations.size} selected chats")
+                    }
+                    if (moveDialog) AlertDialog(onDismissRequest = { moveDialog = false }, title = { Text(if (isFa) "انتقال گفتگوهای انتخاب‌شده" else "Move selected conversations") },
+                        text = { Text(if (isFa) "صفحه مقصد را انتخاب کنید." else "Choose the destination page.") },
+                        confirmButton = { TextButton(onClick = { moveDialog = false }) { Text(if (isFa) "بستن" else "Close") } },
+                        dismissButton = { Row { folderNames.forEach { folder -> TextButton(onClick = { selectedConversations.forEach { chatPrefs.edit().putString("folder_$it", folder).apply() }; activeFolder = folder; selectedConversations = emptySet(); selectionMode = false; moveDialog = false }) { Text(folder) } } } })
+                }
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    LazyRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        item { FilterChip(selected = activeFolder.isBlank(), onClick = { activeFolder = "" }, label = { Text(if (isFa) "همه" else "All") }) }
+                        items(folderNames) { folder -> FilterChip(selected = activeFolder == folder, onClick = { activeFolder = folder }, label = { Text(folder) }) }
+                    }
+                    IconButton(onClick = { folderNameInput = ""; folderDialog = true }) { Icon(Icons.Default.AddCircle, contentDescription = if (isFa) "صفحه جدید" else "New page", tint = Cyan) }
+                }
+                if (folderDialog) AlertDialog(onDismissRequest = { folderDialog = false }, title = { Text(if (isFa) "صفحه جدید" else "New page") },
+                    text = { OutlinedTextField(value = folderNameInput, onValueChange = { folderNameInput = it }, singleLine = true, label = { Text(if (isFa) "نام صفحه" else "Page name") }) },
+                    confirmButton = { TextButton(onClick = { val n = folderNameInput.trim(); if (n.isNotBlank()) { chatFolders = (folderNames + n).distinct().joinToString("|"); chatPrefs.edit().putString("chat_folders", chatFolders).apply(); activeFolder = n }; folderDialog = false }) { Text(if (isFa) "ایجاد" else "Create") } },
+                    dismissButton = { TextButton(onClick = { folderDialog = false }) { Text(if (isFa) "انصراف" else "Cancel") } })
+                // Pinned conversations are always sorted before regular conversations.
+                val visibleConversations = conversations.filter { activeFolder.isBlank() || chatPrefs.getString("folder_${it.address}", "") == activeFolder }
+                    .sortedWith(compareByDescending<SmsRow> { it.address in pinnedChats }.thenByDescending { it.date })
                 // Keep the user's current list position when returning from a conversation.
                 // rememberLazyListState is hoisted above the chat/list branch and restored here.
-                val visibleConversations = conversations.sortedWith(
-                    compareByDescending<SmsRow> { RuleStore.normalizeNumber(it.address) in pinnedConversations }
-                        .thenByDescending { it.date }
-                )
                 if (conversations.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
                     if (!initialLoadComplete && query.isBlank()) CircularProgressIndicator(color = Cyan)
                     else Text(if (query.isNotBlank()) { if (isFa) "نتیجه‌ای برای این جست‌وجو پیدا نشد." else "No matching messages found." } else { if (isFa) "پیامکی برای نمایش پیدا نشد. برای دریافت پیامک جدید، مجوزها و پیام‌رسان پیش‌فرض را بررسی کنید." else "No messages found. Check permissions and the default SMS role to receive new messages." }, color = Muted)
+                } else if (visibleConversations.isEmpty()) {
+                    Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) { Text(if (isFa) "گفتگویی در این صفحه نیست." else "No conversations in this page.", color = Muted) }
                 } else LazyColumn(state = conversationListState, modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(visibleConversations, key = { "${RuleStore.normalizeNumber(it.address)}-${it.date}" }) { row ->
+                    items(visibleConversations, key = { "${it.address}-${it.date}" }) { row ->
                         val displayName = groupedConversations.firstOrNull { it.address == row.address }?.contactName ?: row.address
                         val initials = initialsFor(displayName)
                         val isSelected = row.address in selectedConversations
@@ -1169,15 +1145,7 @@ class MainActivity : ComponentActivity() {
                                     }
                                     Spacer(Modifier.width(6.dp))
                                 }
-                                val canonicalNumber = RuleStore.normalizeNumber(row.address)
-                                val isPinned = canonicalNumber in pinnedConversations
-                                IconButton(onClick = {
-                                    pinnedConversations = if (isPinned) pinnedConversations - canonicalNumber else pinnedConversations + canonicalNumber
-                                    getPreferences(MODE_PRIVATE).edit().putStringSet("pinned_conversations", pinnedConversations).apply()
-                                }) {
-                                    Icon(Icons.Default.PushPin, contentDescription = if (isFa) { if (isPinned) "برداشتن سنجاق" else "سنجاق گفتگو" } else { if (isPinned) "Unpin conversation" else "Pin conversation" },
-                                        tint = if (isPinned) Cyan else Muted)
-                                }
+                                if (row.address in pinnedChats) Icon(Icons.Default.PushPin, contentDescription = if (isFa) "سنجاق‌شده" else "Pinned", tint = Cyan, modifier = Modifier.size(18.dp))
                                 IconButton(onClick = { runCatching { startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:${Uri.encode(row.address)}"))) } }) { Icon(Icons.Default.Call, contentDescription = if (isFa) "تماس" else "Call", tint = Cyan) }
                             }
                         }
@@ -1189,7 +1157,13 @@ class MainActivity : ComponentActivity() {
 
 
     private fun showConversationActions(number: String, isFa: Boolean, changed: () -> Unit) {
+        val prefs = getSharedPreferences("sms_guardian_chat_organization", MODE_PRIVATE)
+        val pinned = prefs.getStringSet("pinned_chats", emptySet())?.contains(number) == true
+        val folders = prefs.getString("chat_folders", "").orEmpty().split("|").filter { it.isNotBlank() }
         val options = arrayOf(
+            if (pinned) (if (isFa) "برداشتن سنجاق" else "Unpin conversation") else (if (isFa) "سنجاق‌کردن بالای فهرست" else "Pin conversation"),
+            if (isFa) "ساخت میانبر روی صفحه اصلی" else "Add home-screen shortcut",
+            if (isFa) "انتقال به صفحه..." else "Move to page...",
             if (isFa) "حذف این گفتگو" else "Delete conversation",
             if (isFa) "مسدود کردن این شماره" else "Block this number",
             if (isFa) "مسدود کردن سرشماره" else "Block sender prefix",
@@ -1200,22 +1174,50 @@ class MainActivity : ComponentActivity() {
             .setTitle(if (isFa) "مدیریت گفتگو: $number" else "Conversation: $number")
             .setItems(options) { dialog, which ->
                 when (which) {
-                    0 -> confirmDeleteConversation(number, isFa, changed)
-                    1 -> { RuleStore.addBlocked(this, number); changed(); android.widget.Toast.makeText(this, if (isFa) "شماره بلاک شد" else "Number blocked", android.widget.Toast.LENGTH_SHORT).show() }
-                    2 -> {
+                    0 -> {
+                        val set = prefs.getStringSet("pinned_chats", emptySet())?.toMutableSet() ?: mutableSetOf()
+                        if (pinned) set.remove(number) else set.add(number)
+                        prefs.edit().putStringSet("pinned_chats", set).apply()
+                        changed()
+                    }
+                    1 -> createConversationShortcut(number, isFa)
+                    2 -> if (folders.isEmpty()) android.widget.Toast.makeText(this, if (isFa) "ابتدا با دکمه + یک صفحه بسازید." else "Create a page with + first.", android.widget.Toast.LENGTH_SHORT).show()
+                        else android.app.AlertDialog.Builder(this).setTitle(if (isFa) "انتقال گفتگو به صفحه" else "Move conversation to page")
+                            .setItems(folders.toTypedArray()) { _, index -> prefs.edit().putString("folder_$number", folders[index]).apply(); changed() }.show()
+                    3 -> confirmDeleteConversation(number, isFa, changed)
+                    4 -> { RuleStore.addBlocked(this, number); changed() }
+                    5 -> {
                         val prefix = number.filter { it.isDigit() || it == '+' }.take(5)
                         if (prefix.isNotBlank()) RuleStore.addPrefix(this, prefix)
                         changed()
-                        android.widget.Toast.makeText(this, if (isFa) "سرشماره $prefix به فهرست بلاک اضافه شد" else "Prefix $prefix blocked", android.widget.Toast.LENGTH_LONG).show()
                     }
-                    3 -> {
-                        RuleStore.addBlocked(this, number)
-                        changed()
-                        confirmDeleteConversation(number, isFa, changed)
-                    }
+                    6 -> { RuleStore.addBlocked(this, number); confirmDeleteConversation(number, isFa, changed) }
                 }
                 dialog.dismiss()
             }.show()
+    }
+
+    private fun createConversationShortcut(number: String, isFa: Boolean) {
+        val id = "sms_chat_" + number.filter { it.isLetterOrDigit() || it == '+' }
+        val intent = Intent(this, MainActivity::class.java).apply {
+            action = Intent.ACTION_VIEW
+            data = Uri.parse("smsguardian://conversation?number=${Uri.encode(number)}")
+            putExtra("open_chat_number", number)
+            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        if (Build.VERSION.SDK_INT >= 26) {
+            val manager = getSystemService(android.content.pm.ShortcutManager::class.java)
+            if (manager?.isRequestPinShortcutSupported == true) {
+                val shortcut = android.content.pm.ShortcutInfo.Builder(this, id)
+                    .setShortLabel((lookupContactName(number) ?: number).take(25))
+                    .setLongLabel(if (isFa) "گفتگو با ${lookupContactName(number) ?: number}" else "Chat with ${lookupContactName(number) ?: number}")
+                    .setIcon(android.graphics.drawable.Icon.createWithResource(this, R.drawable.ic_launcher_minimal))
+                    .setIntent(intent).build()
+                manager.requestPinShortcut(shortcut, null)
+                return
+            }
+        }
+        android.widget.Toast.makeText(this, if (isFa) "این نسخه اندروید از میانبر سنجاق‌شده پشتیبانی نمی‌کند." else "Pinned shortcuts require Android 8 or newer.", android.widget.Toast.LENGTH_LONG).show()
     }
 
     private fun confirmDeleteConversations(numbers: List<String>, isFa: Boolean, changed: () -> Unit) {
@@ -1226,28 +1228,26 @@ class MainActivity : ComponentActivity() {
             .setMessage(if (isFa) "تمام پیامک‌های گفتگوهای انتخاب‌شده از صندوق پیامک حذف می‌شوند و نسخه‌ای در بخش حذف‌شده‌ها نگهداری می‌شود." else "All SMS messages in the selected conversations will be deleted from the SMS provider and archived in Deleted messages.")
             .setNegativeButton(if (isFa) "انصراف" else "Cancel", null)
             .setPositiveButton(if (isFa) "حذف" else "Delete") { _, _ ->
-                val canonicalKeys = uniqueNumbers.map { RuleStore.normalizeNumber(it).ifBlank { it.trim() } }.toSet()
                 val currentRows = cachedSmsRows ?: emptyList()
                 val allRows = cachedAllSmsRows ?: currentRows
-                val archiveRows = allRows.filter { RuleStore.normalizeNumber(it.address) in canonicalKeys }
-                cachedSmsRows = currentRows.filterNot { RuleStore.normalizeNumber(it.address) in canonicalKeys }
-                cachedAllSmsRows = cachedAllSmsRows?.filterNot { RuleStore.normalizeNumber(it.address) in canonicalKeys }
+                val archiveRows = allRows.filter { it.address in uniqueNumbers }
+                cachedSmsRows = currentRows.filterNot { it.address in uniqueNumbers }
+                cachedAllSmsRows = cachedAllSmsRows?.filterNot { it.address in uniqueNumbers }
                 cachedConversationPreviews = null
                 changed()
                 lifecycleScope.launch {
                     val result = withContext(Dispatchers.IO) {
                         runCatching {
-                            val fullHistory = canonicalKeys.flatMap { key -> querySmsRowsForConversation(key) }.distinctBy { "${it.address}|${it.date}|${it.type}|${it.body}" }
-                            val allToDelete = if (fullHistory.isNotEmpty()) fullHistory else archiveRows
-                            archiveDeletedMessages(allToDelete)
-                            allToDelete.map { it.address }.plus(uniqueNumbers).distinct().forEach { address ->
-                                contentResolver.delete(Telephony.Sms.CONTENT_URI, "address = ?", arrayOf(address))
+                            val fullHistory = uniqueNumbers.flatMap { number -> querySmsRows(address = number) }
+                            archiveDeletedMessages(if (fullHistory.isNotEmpty()) fullHistory else archiveRows)
+                            uniqueNumbers.forEach { number ->
+                                contentResolver.delete(Telephony.Sms.CONTENT_URI, "address = ?", arrayOf(number))
                             }
                         }
                     }
                     result.onSuccess {
-                        cachedSmsRows = (cachedSmsRows ?: emptyList()).filterNot { RuleStore.normalizeNumber(it.address) in canonicalKeys }
-                        cachedAllSmsRows = cachedAllSmsRows?.filterNot { RuleStore.normalizeNumber(it.address) in canonicalKeys }
+                        cachedSmsRows = (cachedSmsRows ?: emptyList()).filterNot { it.address in uniqueNumbers }
+                        cachedAllSmsRows = cachedAllSmsRows?.filterNot { it.address in uniqueNumbers }
                         cachedConversationPreviews = null
                         changed()
                         android.widget.Toast.makeText(this@MainActivity, if (isFa) "${uniqueNumbers.size} گفتگو حذف شد" else "${uniqueNumbers.size} conversations deleted", android.widget.Toast.LENGTH_SHORT).show()
@@ -1267,30 +1267,25 @@ class MainActivity : ComponentActivity() {
             .setMessage(if (isFa) "تمام پیامک‌های این شماره از صندوق پیامک حذف می‌شوند." else "All SMS messages for this number will be deleted from the SMS provider.")
             .setNegativeButton(if (isFa) "انصراف" else "Cancel", null)
             .setPositiveButton(if (isFa) "حذف" else "Delete") { _, _ ->
-                val canonical = RuleStore.normalizeNumber(number).ifBlank { number.trim() }
                 val currentRows = cachedSmsRows ?: emptyList()
                 val hadFullHistory = cachedAllSmsRows != null
                 val allCurrentRows = cachedAllSmsRows ?: currentRows
-                val toArchive = allCurrentRows.filter { RuleStore.normalizeNumber(it.address) == canonical }
-                cachedSmsRows = currentRows.filterNot { RuleStore.normalizeNumber(it.address) == canonical }
-                cachedAllSmsRows = if (hadFullHistory) allCurrentRows.filterNot { RuleStore.normalizeNumber(it.address) == canonical } else null
+                val toArchive = allCurrentRows.filter { it.address == number }
+                cachedSmsRows = currentRows.filterNot { it.address == number }
+                cachedAllSmsRows = if (hadFullHistory) allCurrentRows.filterNot { it.address == number } else null
                 cachedConversationPreviews = null
                 changed()
                 android.widget.Toast.makeText(this, if (isFa) "در حال حذف گفتگو…" else "Deleting conversation…", android.widget.Toast.LENGTH_SHORT).show()
                 lifecycleScope.launch {
                     val result = withContext(Dispatchers.IO) {
                         runCatching {
-                            val fullHistory = querySmsRowsForConversation(number)
-                            val allToArchive = if (fullHistory.isNotEmpty()) fullHistory else toArchive
-                            archiveDeletedMessages(allToArchive)
-                            (allToArchive.map { it.address } + number).distinct().forEach { address ->
-                                contentResolver.delete(Telephony.Sms.CONTENT_URI, "address = ?", arrayOf(address))
-                            }
+                            archiveDeletedMessages(toArchive)
+                            contentResolver.delete(Telephony.Sms.CONTENT_URI, "address = ?", arrayOf(number))
                         }
                     }
                     result.onSuccess {
-                        cachedSmsRows = (cachedSmsRows ?: emptyList()).filterNot { RuleStore.normalizeNumber(it.address) == canonical }
-                        cachedAllSmsRows = cachedAllSmsRows?.filterNot { RuleStore.normalizeNumber(it.address) == canonical }
+                        cachedSmsRows = (cachedSmsRows ?: emptyList()).filterNot { it.address == number }
+                        cachedAllSmsRows = cachedAllSmsRows?.filterNot { it.address == number }
                         cachedConversationPreviews = null
                         changed()
                         android.widget.Toast.makeText(this@MainActivity, if (isFa) "گفتگو حذف شد" else "Conversation deleted", android.widget.Toast.LENGTH_SHORT).show()
@@ -1309,16 +1304,8 @@ class MainActivity : ComponentActivity() {
         val key = number.trim()
         if (key.isBlank()) return emptyList()
         val digits = key.filter { it.isDigit() }
-        val normalized = RuleStore.normalizeNumber(key)
         return linkedSetOf<String>().apply {
             add(key)
-            if (normalized.isNotBlank()) {
-                add(normalized)
-                if (normalized.startsWith("0") && normalized.length > 1) {
-                    add("+98${normalized.drop(1)}")
-                    add("0098${normalized.drop(1)}")
-                }
-            }
             if (digits.isNotBlank()) {
                 add(digits)
                 add("+$digits")
@@ -1419,7 +1406,6 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable private fun DeletedMessagesPage(isFa: Boolean, refresh: Int, changed: () -> Unit) {
-        var selectedArchiveKeys by remember { mutableStateOf(setOf<String>()) }
         val messages = remember(refresh) {
             val deleted = readDeletedMessages().map { it to false }
             val blocked = RuleStore.archivedBlocked(this@MainActivity).let { array ->
@@ -1432,50 +1418,37 @@ class MainActivity : ComponentActivity() {
             }
             (deleted + blocked).sortedByDescending { it.first.date }
         }
-        fun archiveSelectionKey(entry: Pair<SmsRow, Boolean>): String =
-            "${entry.second}|${entry.first.address}|${entry.first.date}|${entry.first.body.hashCode()}"
+        var selected by remember(refresh) { mutableStateOf(setOf<String>()) }
+        fun keyOf(entry: Pair<SmsRow, Boolean>) = "${entry.second}|${entry.first.address}|${entry.first.date}|${entry.first.body.hashCode()}"
         Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
-            Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(if (isFa) "حذف‌شده و بلاک‌شده" else "Deleted & blocked", color = TextWhite, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                if (messages.isNotEmpty()) {
-                    TextButton(onClick = {
-                        selectedArchiveKeys = if (selectedArchiveKeys.size == messages.size) emptySet() else messages.map(::archiveSelectionKey).toSet()
-                    }) { Text(if (selectedArchiveKeys.size == messages.size) { if (isFa) "لغو انتخاب" else "Clear" } else { if (isFa) "انتخاب همه" else "Select all" }) }
-                    IconButton(enabled = selectedArchiveKeys.isNotEmpty(), onClick = {
-                        val selected = messages.filter { archiveSelectionKey(it) in selectedArchiveKeys }
-                        android.app.AlertDialog.Builder(this@MainActivity)
-                            .setTitle(if (isFa) "حذف ${selected.size} پیام؟" else "Delete ${selected.size} messages?")
-                            .setMessage(if (isFa) "پیام‌های انتخاب‌شده برای همیشه از آرشیو حذف می‌شوند." else "Selected messages will be permanently removed from the archive.")
-                            .setNegativeButton(if (isFa) "انصراف" else "Cancel", null)
-                            .setPositiveButton(if (isFa) "حذف" else "Delete") { _, _ ->
-                                selected.forEach { (row, isBlocked) ->
-                                    if (isBlocked) RuleStore.removeArchivedBlocked(this@MainActivity, row.address, row.body, row.date)
-                                    else removeArchivedMessage(row)
-                                }
-                                selectedArchiveKeys = emptySet()
-                                changed()
-                            }.show()
-                    }) { Icon(Icons.Default.DeleteOutline, contentDescription = if (isFa) "حذف گروهی" else "Delete selected", tint = if (selectedArchiveKeys.isNotEmpty()) Color(0xFFFF6B6B) else Muted) }
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(if (isFa) "پیامک‌های حذف‌شده و بلاک‌شده" else "Deleted & blocked messages", color = TextWhite, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f).padding(vertical = 12.dp))
+                if (selected.isNotEmpty()) TextButton(onClick = {
+                    messages.filter { keyOf(it) in selected }.forEach { entry ->
+                        val row = entry.first
+                        if (entry.second) RuleStore.removeArchivedBlocked(this@MainActivity, row.address, row.body, row.date)
+                        else removeArchivedMessage(row)
+                    }
+                    selected = emptySet()
+                    changed()
+                }) { Icon(Icons.Default.Delete, null); Text(if (isFa) "حذف (${selected.size})" else "Delete (${selected.size})") }
+                TextButton(onClick = { selected = if (selected.size == messages.size) emptySet() else messages.map(::keyOf).toSet() }, enabled = messages.isNotEmpty()) {
+                    Text(if (selected.size == messages.size) (if (isFa) "لغو انتخاب" else "Clear") else (if (isFa) "انتخاب همه" else "Select all"))
                 }
             }
-            Text(if (isFa) "پیامک‌های حذف‌شده و مسدودشده در این بخش نگهداری می‌شوند." else "Deleted and blocked messages are kept here.", color = Muted, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 12.dp))
+            Text(if (isFa) "پیامک‌های حذف‌شده و مسدودشده را می‌توانی یکجا انتخاب و حذف کنی." else "Select and remove deleted or blocked messages in bulk.", color = Muted, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 12.dp))
             if (messages.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(if (isFa) "آرشیو پیامک‌های حذف‌شده خالی است." else "The deleted-message archive is empty.", color = Muted) }
             } else LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(messages, key = { "archive-${it.second}-${it.first.address}-${it.first.date}-${it.first.body.hashCode()}" }) { entry ->
+                items(messages, key = { keyOf(it) }) { entry ->
                     val row = entry.first
                     val isBlocked = entry.second
-                    Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
+                    val key = keyOf(entry)
+                    Card(colors = CardDefaults.cardColors(containerColor = if (key in selected) Cyan.copy(alpha = .16f) else Panel), shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth().clickable { selected = if (key in selected) selected - key else selected + key }) {
                         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Checkbox(
-                                    checked = archiveSelectionKey(entry) in selectedArchiveKeys,
-                                    onCheckedChange = { checked ->
-                                        val key = archiveSelectionKey(entry)
-                                        selectedArchiveKeys = if (checked) selectedArchiveKeys + key else selectedArchiveKeys - key
-                                    }
-                                )
-                                Text("${if (isBlocked) { if (isFa) "مسدودشده" else "Blocked" } else { if (isFa) "حذف‌شده" else "Deleted" }} · ${lookupContactName(row.address) ?: row.address} · ${SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(row.date))}", color = Cyan, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                                Checkbox(checked = key in selected, onCheckedChange = { checked -> selected = if (checked) selected + key else selected - key })
+                                Text("${if (isBlocked) { if (isFa) "مسدودشده" else "Blocked" } else { if (isFa) "حذف‌شده" else "Deleted" }} · ${lookupContactName(row.address) ?: row.address} · ${SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(row.date))}", color = Cyan, fontWeight = FontWeight.SemiBold)
                             }
                             Text(row.body, color = TextWhite)
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1486,6 +1459,7 @@ class MainActivity : ComponentActivity() {
                                 }) { Text(if (isFa) "بازیابی" else "Restore") }
                                 TextButton(onClick = {
                                     if (isBlocked) RuleStore.removeArchivedBlocked(this@MainActivity, row.address, row.body, row.date) else removeArchivedMessage(row)
+                                    selected = selected - key
                                     changed()
                                 }) { Text(if (isFa) "حذف از آرشیو" else "Remove from archive") }
                             }
@@ -1497,7 +1471,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun conversationLastVisitKey(address: String): String =
-        "conversation_last_visit:${RuleStore.normalizeNumber(address).ifBlank { address.trim() }}"
+        "conversation_last_visit:$address"
 
     private fun unreadSmsCounts(): Map<String, Int> {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) return emptyMap()
@@ -1521,8 +1495,7 @@ class MainActivity : ComponentActivity() {
                     val isUnreadInProvider = readColumn >= 0 && cursor.getInt(readColumn) == 0
                     val isNewSinceVisit = lastVisit >= 0L && date > lastVisit
                     if (address.isBlank() || !(if (lastVisit >= 0L) isNewSinceVisit else isUnreadInProvider)) continue
-                    val canonical = RuleStore.normalizeNumber(address).ifBlank { address.trim() }
-                    counts[canonical] = (counts[canonical] ?: 0) + 1
+                    counts[address] = (counts[address] ?: 0) + 1
                 }
             }
         }.onFailure { android.util.Log.e("SMSGuardian", "Could not calculate per-conversation unread counts", it) }
@@ -1530,13 +1503,13 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun unreadCountForAddress(counts: Map<String, Int>, address: String): Int =
-        counts[RuleStore.normalizeNumber(address).ifBlank { address.trim() }] ?: 0
+        counts[address] ?: 0
 
     private fun markConversationRead(address: String) {
         if (address.isBlank()) return
         // This is an app-local read marker. It deliberately does not modify the Android
         // SMS Provider, so it works even when SMSGuardian is not the default SMS app.
-        // Read state is tracked against the same normalized number key used by chat grouping.
+        // Exact address matching keeps distinct provider addresses in separate chats.
         getPreferences(MODE_PRIVATE).edit()
             .putLong(conversationLastVisitKey(address), System.currentTimeMillis())
             .apply()
@@ -1615,7 +1588,12 @@ class MainActivity : ComponentActivity() {
                         if (isFa) "نمایش پیامک‌های حذف‌شده و بازیابی آرشیو" else "Deleted-message archive and restoration",
                         if (isFa) "لینک‌های قابل کلیک، پیش‌نویس خودکار و وضعیت ارسال/تحویل با تیک" else "Clickable links, saved drafts, and sent/delivered checkmarks",
                         if (isFa) "انتخاب مخاطب از دفترچه تلفن، افزودن مخاطب و انتخاب سیم‌کارت" else "Contact picker, add-contact shortcut, and SIM selection",
-                        if (isFa) "انتخاب رنگ، آیکون و زبان برنامه" else "Custom themes, launcher icons, and language",
+                        if (isFa) "انتخاب رنگ، آیکون و زبان برنامه؛ آیکون مینیمال به‌صورت پیش‌فرض" else "Custom themes, launcher icons, and language; Minimal launcher icon by default",
+                        if (isFa) "سنجاق‌کردن گفتگوها و ساخت میانبر برای دسترسی سریع از صفحه اصلی" else "Pin conversations and create home-screen shortcuts",
+                        if (isFa) "ساخت صفحه‌های شخصی مانند خانواده، دوستان و همکاران برای دسته‌بندی گفتگوها" else "Organize chats into custom pages such as Family, Friends, and Work",
+                        if (isFa) "ارسال یک پیامک به چند شماره و مدیریت مقصدهای فوروارد به‌صورت مستقل" else "Send an SMS to multiple recipients and independently enable forwarding destinations",
+                        if (isFa) "انتخاب و حذف گروهی پیامک‌های آرشیوشده" else "Bulk selection and deletion of archived messages",
+                        if (isFa) "با لمس هر قسمت حباب پیامک، کپی و فوروارد در دسترس است" else "Tap anywhere on a message bubble to access copy and forwarding actions",
                         if (isFa) "اعلان پیامک جدید و تنظیمات فوروارد" else "New-message notifications and forwarding settings"
                     ).forEach { item -> Row(verticalAlignment = Alignment.Top) { Icon(Icons.Default.Check, null, tint = Cyan, modifier = Modifier.size(20.dp)); Spacer(Modifier.width(10.dp)); Text(item, color = aboutCardText) } }
                 }
@@ -1638,9 +1616,6 @@ class MainActivity : ComponentActivity() {
         var d1 by remember { mutableStateOf(prefs.getString("destination1", "") ?: "") }
         var d2 by remember { mutableStateOf(prefs.getString("destination2", "") ?: "") }
         var d3 by remember { mutableStateOf(prefs.getString("destination3", "") ?: "") }
-        var d1Enabled by remember { mutableStateOf(prefs.getBoolean("destination_enabled1", true)) }
-        var d2Enabled by remember { mutableStateOf(prefs.getBoolean("destination_enabled2", true)) }
-        var d3Enabled by remember { mutableStateOf(prefs.getBoolean("destination_enabled3", true)) }
         var startTime by remember { mutableStateOf(prefs.getString("start_time", "00:00") ?: "00:00") }
         var endTime by remember { mutableStateOf(prefs.getString("end_time", "23:59") ?: "23:59") }
         var enabled by remember { mutableStateOf(prefs.getBoolean("enabled", false)) }
@@ -1665,7 +1640,6 @@ class MainActivity : ComponentActivity() {
                         enabled = on
                         prefs.edit().putString("source", source.trim()).putString("keyword", keyword.trim())
                             .putString("destination1", d1.trim()).putString("destination2", d2.trim()).putString("destination3", d3.trim())
-                            .putBoolean("destination_enabled1", d1Enabled).putBoolean("destination_enabled2", d2Enabled).putBoolean("destination_enabled3", d3Enabled)
                             .putString("start_time", startTime.trim()).putString("end_time", endTime.trim())
                             .putBoolean("enabled", on).apply()
                         if (on) SmsForwarding.showStatus(this@MainActivity) else SmsForwarding.hideStatus(this@MainActivity)
@@ -1682,22 +1656,25 @@ class MainActivity : ComponentActivity() {
             OutlinedTextField(value = source, onValueChange = { source = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text(if (isFa) "خالی = هر شماره‌ای" else "Blank = any sender") })
             Text(if (isFa) "عبارت موردنظر (اختیاری)" else "Keyword (optional)", color = TextWhite, fontWeight = FontWeight.Medium)
             OutlinedTextField(value = keyword, onValueChange = { keyword = it }, modifier = Modifier.fillMaxWidth(), placeholder = { Text(if (isFa) "خالی = هر پیامکی" else "Blank = every SMS") })
-            Text(if (isFa) "شماره‌های مقصد (هر شماره را می‌توانید موقتاً فعال یا غیرفعال کنید)" else "Destination numbers (each can be temporarily enabled or disabled)", color = TextWhite, fontWeight = FontWeight.Medium)
-            @Composable fun destinationRow(label: String, value: String, onValue: (String) -> Unit, active: Boolean, onActive: (Boolean) -> Unit, placeholder: String = "") {
-                Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(10.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(label, color = TextWhite, modifier = Modifier.weight(1f), fontWeight = FontWeight.Medium)
-                            Switch(checked = active, onCheckedChange = onActive, enabled = value.isNotBlank())
-                        }
-                        OutlinedTextField(value = value, onValueChange = onValue, modifier = Modifier.fillMaxWidth(), singleLine = true, placeholder = { if (placeholder.isNotBlank()) Text(placeholder) })
-                        Text(if (active) { if (isFa) "این مقصد فعال است" else "This destination is active" } else { if (isFa) "این مقصد موقتاً غیرفعال است" else "Temporarily disabled" }, color = if (active) Cyan else Muted, style = MaterialTheme.typography.labelSmall)
-                    }
+            Text(if (isFa) "شماره مقصد ۱ (اجباری)" else "Destination 1 (required)", color = TextWhite, fontWeight = FontWeight.Medium)
+            OutlinedTextField(value = d1, onValueChange = { d1 = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("+98912…") })
+            Text(if (isFa) "شماره مقصد ۲ (اختیاری)" else "Destination 2 (optional)", color = TextWhite, fontWeight = FontWeight.Medium)
+            OutlinedTextField(value = d2, onValueChange = { d2 = it }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+            Text(if (isFa) "شماره مقصد ۳ (اختیاری)" else "Destination 3 (optional)", color = TextWhite, fontWeight = FontWeight.Medium)
+            OutlinedTextField(value = d3, onValueChange = { d3 = it }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+            var destination1Enabled by remember { mutableStateOf(prefs.getBoolean("destination1_enabled", true)) }
+            var destination2Enabled by remember { mutableStateOf(prefs.getBoolean("destination2_enabled", true)) }
+            var destination3Enabled by remember { mutableStateOf(prefs.getBoolean("destination3_enabled", true)) }
+            val destinationEnabled = listOf(destination1Enabled, destination2Enabled, destination3Enabled)
+            listOf(d1, d2, d3).forEachIndexed { index, number ->
+                if (number.isNotBlank()) Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(12.dp)).padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(if (isFa) "فعال‌بودن مقصد ${index + 1} · $number" else "Destination ${index + 1} · $number", color = TextWhite, modifier = Modifier.weight(1f))
+                    Switch(checked = destinationEnabled[index], onCheckedChange = { value ->
+                        when (index) { 0 -> destination1Enabled = value; 1 -> destination2Enabled = value; else -> destination3Enabled = value }
+                        prefs.edit().putBoolean("destination${index + 1}_enabled", value).apply()
+                    })
                 }
             }
-            destinationRow(if (isFa) "شماره مقصد ۱ (اصلی)" else "Destination 1 (primary)", d1, { d1 = it }, d1Enabled, { d1Enabled = it; prefs.edit().putBoolean("destination_enabled1", it).apply() }, "+98912…")
-            destinationRow(if (isFa) "شماره مقصد ۲ (اختیاری)" else "Destination 2 (optional)", d2, { d2 = it }, d2Enabled, { d2Enabled = it; prefs.edit().putBoolean("destination_enabled2", it).apply() })
-            destinationRow(if (isFa) "شماره مقصد ۳ (اختیاری)" else "Destination 3 (optional)", d3, { d3 = it }, d3Enabled, { d3Enabled = it; prefs.edit().putBoolean("destination_enabled3", it).apply() })
             Button(onClick = {
                 if (listOf(d1,d2,d3).none { it.isNotBlank() }) {
                     android.widget.Toast.makeText(this@MainActivity, if (isFa) "حداقل یک شماره مقصد لازم است." else "At least one destination is required.", android.widget.Toast.LENGTH_LONG).show()
@@ -1706,7 +1683,7 @@ class MainActivity : ComponentActivity() {
                         android.widget.Toast.makeText(this@MainActivity, if (isFa) "ساعت شروع و پایان باید به شکل HH:mm و در قالب ۲۴ ساعته باشند." else "Enter valid 24-hour times in HH:mm format.", android.widget.Toast.LENGTH_LONG).show()
                         return@Button
                     }
-                    prefs.edit().putString("source", source.trim()).putString("keyword", keyword.trim()).putString("destination1", d1.trim()).putString("destination2", d2.trim()).putString("destination3", d3.trim()).putBoolean("destination_enabled1", d1Enabled).putBoolean("destination_enabled2", d2Enabled).putBoolean("destination_enabled3", d3Enabled).putString("start_time", startTime.trim()).putString("end_time", endTime.trim()).putBoolean("enabled", enabled).apply()
+                    prefs.edit().putString("source", source.trim()).putString("keyword", keyword.trim()).putString("destination1", d1.trim()).putString("destination2", d2.trim()).putString("destination3", d3.trim()).putString("start_time", startTime.trim()).putString("end_time", endTime.trim()).putBoolean("enabled", enabled).apply()
                     if (enabled) SmsForwarding.showStatus(this@MainActivity) else SmsForwarding.hideStatus(this@MainActivity)
                     android.widget.Toast.makeText(this@MainActivity, if (isFa) "تنظیمات فوروارد ذخیره شد." else "Forwarding settings saved.", android.widget.Toast.LENGTH_SHORT).show()
                 }

@@ -77,7 +77,8 @@ class SmsForwardingReceiver : BroadcastReceiver() {
         if (keyword.isNotEmpty() && !body.contains(keyword, ignoreCase = true)) return
         val destinations = (1..3).mapNotNull { index ->
             val number = p.getString("destination$index", "").orEmpty().trim()
-            number.takeIf { it.isNotEmpty() && p.getBoolean("destination_enabled$index", true) }
+            val active = p.getBoolean("destination${index}_enabled", true)
+            number.takeIf { it.isNotEmpty() && active }
         }.distinct()
         if (destinations.isEmpty()) return
         var ok = 0; var failed = 0
