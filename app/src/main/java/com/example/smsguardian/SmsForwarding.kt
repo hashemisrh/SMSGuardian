@@ -75,7 +75,10 @@ class SmsForwardingReceiver : BroadcastReceiver() {
         val keyword = p.getString("keyword", "").orEmpty().trim()
         if (source.isNotEmpty() && normalize(sender) != normalize(source)) return
         if (keyword.isNotEmpty() && !body.contains(keyword, ignoreCase = true)) return
-        val destinations = (1..3).map { p.getString("destination$it", "").orEmpty().trim() }.filter { it.isNotEmpty() }.distinct()
+        val destinations = (1..3).mapNotNull { index ->
+            val number = p.getString("destination$index", "").orEmpty().trim()
+            number.takeIf { it.isNotEmpty() && p.getBoolean("destination_enabled$index", true) }
+        }.distinct()
         if (destinations.isEmpty()) return
         var ok = 0; var failed = 0
         val manager = if (Build.VERSION.SDK_INT >= 31) context.getSystemService(SmsManager::class.java) else defaultSmsManager()
