@@ -57,6 +57,7 @@ import androidx.compose.material.icons.filled.Forward
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Contacts
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Palette
