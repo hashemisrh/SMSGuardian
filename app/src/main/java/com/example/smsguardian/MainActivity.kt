@@ -386,12 +386,52 @@ class MainActivity : ComponentActivity() {
 
     private fun setLauncherIcon(choice: Int) {
         val aliases = listOf(".IconClassic", ".IconOcean", ".IconSunset", ".IconMinimal")
+        val selectedIndex = choice.coerceIn(0, aliases.lastIndex)
         val pm = packageManager
-        aliases.forEachIndexed { index, alias ->
-            val component = android.content.ComponentName(this, packageName + alias)
-            pm.setComponentEnabledSetting(component, if (index == choice.coerceIn(0, aliases.lastIndex)) PackageManager.COMPONENT_ENABLED_STATE_ENABLED else PackageManager.COMPONENT_ENABLED_STATE_DISABLED, PackageManager.DONT_KILL_APP)
+        val components = aliases.map { alias ->
+            android.content.ComponentName(this, packageName + alias)
         }
-        getPreferences(MODE_PRIVATE).edit().putInt("launcher_icon_choice", choice.coerceIn(0, aliases.lastIndex)).apply()
+
+        // Change the launcher entry as one atomic operation on Android 13+.
+        // On older versions, enable the new entry BEFORE disabling the old ones;
+        // disabling the currently-used launcher alias first can make some launchers
+        // terminate/relaunch the app while the icon is being changed.
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                val settings = components.mapIndexed { index, component ->
+                    PackageManager.ComponentEnabledSetting(
+                        component,
+                        if (index == selectedIndex) PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+                        else PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                        PackageManager.DONT_KILL_APP
+                    )
+                }
+                pm.setComponentEnabledSettings(settings)
+            } else {
+                pm.setComponentEnabledSetting(
+                    components[selectedIndex],
+                    PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+                    PackageManager.DONT_KILL_APP
+                )
+                components.forEachIndexed { index, component ->
+                    if (index != selectedIndex) {
+                        pm.setComponentEnabledSetting(
+                            component,
+                            PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                            PackageManager.DONT_KILL_APP
+                        )
+                    }
+                }
+            }
+            getPreferences(MODE_PRIVATE).edit().putInt("launcher_icon_choice", selectedIndex).apply()
+        } catch (error: Exception) {
+            android.util.Log.e("SMSGuardian", "Unable to update launcher icon", error)
+            android.widget.Toast.makeText(
+                this,
+                getString(R.string.app_name) + ": " + error.localizedMessage.orEmpty(),
+                android.widget.Toast.LENGTH_LONG
+            ).show()
+        }
     }
 
     private fun draftKey(address: String): String = "sms_draft_" + address.filter { it.isLetterOrDigit() || it == '+' }
@@ -671,19 +711,19 @@ class MainActivity : ComponentActivity() {
             // Minimal is the default only on a truly fresh install. Never overwrite
             // a previously saved user's launcher icon when the app starts/upgrades.
             if (!migration.getBoolean("minimal_icon_default_applied", false)) {
-                if (!migration.contains("launcher_icon_choice")) {
-                    setLauncherIcon(3)
-                    launcherIconChoice = 3
-                } else {
-                    launcherIconChoice = migration.getInt("launcher_icon_choice", 3).coerceIn(0, 3)
+                // The manifest already enables Minimal on a fresh install. Apply a
+                // saved pre-existing choice only once during migration. PackageManager
+                // component states survive process death, so changing aliases on every
+                // launch is unnecessary and can disrupt some device launchers.
+                launcherIconChoice = migration.getInt("launcher_icon_choice", 3).coerceIn(0, 3)
+                if (migration.contains("launcher_icon_choice")) {
                     setLauncherIcon(launcherIconChoice)
+                } else {
+                    migration.edit().putInt("launcher_icon_choice", 3).apply()
                 }
                 migration.edit().putBoolean("minimal_icon_default_applied", true).apply()
             } else {
                 launcherIconChoice = migration.getInt("launcher_icon_choice", 3).coerceIn(0, 3)
-                // Re-apply the persisted alias state on every process start. Launcher
-                // caches can otherwise show the application fallback icon after upgrades.
-                setLauncherIcon(launcherIconChoice)
             }
         }
         val isFa = language == "fa"
