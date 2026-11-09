@@ -57,7 +57,6 @@ import androidx.compose.material.icons.filled.Forward
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Contacts
-import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Palette
@@ -104,6 +103,7 @@ private var Cyan = Color(0xFF12C9C3)
 private var TextWhite = Color(0xFFF1F6FF)
 private var Muted = Color(0xFF9AAAC3)
 private data class ContactSuggestion(val name: String, val number: String)
+private data class InternalSmsGroup(val id: String, val name: String, val members: List<String>, val createdAt: Long)
 private data class ConversationPreview(val address: String, val latestMessage: SmsRow, val contactName: String?)
 
 data class SmsRow(val address: String, val body: String, val date: Long, val type: Int)
@@ -763,6 +763,8 @@ class MainActivity : ComponentActivity() {
         var activeFolder by remember { mutableStateOf("") }
         var folderDialog by remember { mutableStateOf(false) }
         var folderNameInput by remember { mutableStateOf("") }
+        var editingFolder by remember { mutableStateOf<String?>(null) }
+        var folderManageDialog by remember { mutableStateOf(false) }
         var showComposer by remember { mutableStateOf(false) }
         var targetMessage by remember { mutableStateOf<SmsRow?>(null) }
         var appliedChatSearch by remember { mutableStateOf("") }
@@ -792,6 +794,8 @@ class MainActivity : ComponentActivity() {
         var subId by remember { mutableStateOf<Int?>(null) }
         var sims by remember { mutableStateOf(emptyList<Pair<Int, String>>()) }
         var localRefresh by remember { mutableIntStateOf(0) }
+        LaunchedEffect(localRefresh, refresh) { pinnedChats = chatPrefs.getStringSet("pinned_chats", emptySet())?.toSet() ?: emptySet() }
+        LaunchedEffect(pinnedChats) { if (pinnedChats.isNotEmpty()) conversationListState.animateScrollToItem(0) }
         val unreadCounts = remember(refresh, localRefresh, rows.size, selectedNumber) { unreadSmsCounts() }
         val badgeColorChoice = getSharedPreferences("sms_guardian_settings", MODE_PRIVATE).getInt("unread_badge_color", 0)
         val smsTextDirectionChoice = getSharedPreferences("sms_guardian_settings", MODE_PRIVATE).getInt("sms_text_direction", 0)
@@ -802,7 +806,7 @@ class MainActivity : ComponentActivity() {
         }
         val badgeColor = listOf(Color(0xFFFF9800), Color(0xFFE53935), Color(0xFF1565C0), Color(0xFF00897B))[badgeColorChoice.coerceIn(0, 3)]
         LaunchedEffect(refresh, localRefresh) {
-            rows = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { loadRows() }
+            rows = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { loadRows() + internalGroupPreviewRows() }
             initialLoadComplete = true
             sims = if (Build.VERSION.SDK_INT >= 22 && ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) runCatching {
                 SubscriptionManager.from(this@MainActivity).activeSubscriptionInfoList.orEmpty().mapIndexed { i, sub ->
@@ -825,23 +829,30 @@ class MainActivity : ComponentActivity() {
             var loadedThreadRows by remember(currentNumber) { mutableStateOf<List<SmsRow>?>(null) }
             var threadSearchExpanded by remember(currentNumber) { mutableStateOf(false) }
             var threadSearchQuery by remember(currentNumber) { mutableStateOf("") }
+            var groupEditDialog by remember(currentNumber) { mutableStateOf(false) }
+            var groupNameDraft by remember(currentNumber) { mutableStateOf("") }
+            var groupMembersDraft by remember(currentNumber) { mutableStateOf("") }
             LaunchedEffect(currentNumber) {
                 threadMessage = getPreferences(MODE_PRIVATE).getString(draftKey(currentNumber), "") ?: ""
             }
             LaunchedEffect(currentNumber, refresh, localRefresh) {
                 loadedThreadRows = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    querySmsRows(address = currentNumber).sortedBy { it.date }
+                    if (currentNumber.startsWith("group:")) groupThreadRows(currentNumber.removePrefix("group:")) else querySmsRows(address = currentNumber).sortedBy { it.date }
                 }
             }
             val thread = loadedThreadRows ?: emptyList()
             Column(Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = { getPreferences(MODE_PRIVATE).edit().putString(draftKey(currentNumber), threadMessage).apply(); markConversationRead(currentNumber); selectedNumber = null; targetMessage = null; localRefresh++ }) { Icon(Icons.Default.ArrowBack, contentDescription = if (isFa) "بازگشت" else "Back", tint = Cyan) }
-                    Column(Modifier.weight(1f)) {
-                        Text(lookupContactName(currentNumber) ?: currentNumber, color = TextWhite, fontWeight = FontWeight.Bold)
-                        Text(currentNumber, color = Muted, style = MaterialTheme.typography.labelSmall)
+                    Column(Modifier.weight(1f).then(if (currentNumber.startsWith("group:")) Modifier.clickable {
+                        val g = readInternalGroups().firstOrNull { it.id == currentNumber.removePrefix("group:") }
+                        if (g != null) { groupNameDraft = g.name; groupMembersDraft = g.members.joinToString(", "); groupEditDialog = true }
+                    } else Modifier)) {
+                        val group = if (currentNumber.startsWith("group:")) readInternalGroups().firstOrNull { it.id == currentNumber.removePrefix("group:") } else null
+                        Text(group?.name ?: lookupContactName(currentNumber) ?: currentNumber, color = TextWhite, fontWeight = FontWeight.Bold)
+                        Text(if (group != null) (if (isFa) "${group.members.size} عضو • برای مدیریت لمس کنید" else "${group.members.size} members • tap to manage") else currentNumber, color = Muted, style = MaterialTheme.typography.labelSmall)
                     }
-                    if (lookupContactName(currentNumber) == null) {
+                    if (!currentNumber.startsWith("group:") && lookupContactName(currentNumber) == null) {
                         IconButton(onClick = {
                             runCatching {
                                 val add = Intent(ContactsContract.Intents.Insert.ACTION).apply {
@@ -855,10 +866,25 @@ class MainActivity : ComponentActivity() {
                     IconButton(onClick = { threadSearchExpanded = !threadSearchExpanded; if (!threadSearchExpanded) threadSearchQuery = "" }) {
                         Icon(if (threadSearchExpanded) Icons.Default.Close else Icons.Default.Search, contentDescription = if (isFa) "جست‌وجو در این گفتگو" else "Search this conversation", tint = Cyan)
                     }
-                    IconButton(onClick = { runCatching { startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:${Uri.encode(currentNumber)}"))) } }) {
+                    if (!currentNumber.startsWith("group:")) IconButton(onClick = { runCatching { startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:${Uri.encode(currentNumber)}"))) } }) {
                         Icon(Icons.Default.Call, contentDescription = if (isFa) "تماس" else "Call", tint = Cyan)
                     }
                 }
+                if (groupEditDialog && currentNumber.startsWith("group:")) AlertDialog(
+                    onDismissRequest = { groupEditDialog = false },
+                    title = { Text(if (isFa) "مدیریت گروه" else "Manage group") },
+                    text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(value = groupNameDraft, onValueChange = { groupNameDraft = it }, singleLine = true, label = { Text(if (isFa) "نام گروه" else "Group name") })
+                        OutlinedTextField(value = groupMembersDraft, onValueChange = { groupMembersDraft = it }, minLines = 2, label = { Text(if (isFa) "شماره اعضا (با ویرگول جدا کنید)" else "Member numbers (comma separated)") })
+                        Text(if (isFa) "اعضا را با افزودن یا حذف شماره‌ها مدیریت کنید. پاسخ‌ها فقط در همین برنامه تجمیع می‌شوند." else "Add or remove numbers. Replies are aggregated locally in this app.", color = Muted, style = MaterialTheme.typography.bodySmall)
+                    } },
+                    confirmButton = { TextButton(onClick = {
+                        val members = groupMembersDraft.split(',', ';', '\n').map { it.trim() }.filter { it.any(Char::isDigit) }.distinct()
+                        if (members.size >= 2) { updateInternalGroup(currentNumber.removePrefix("group:"), groupNameDraft.trim().ifBlank { if (isFa) "گروه پیامکی" else "SMS group" }, members); localRefresh++; groupEditDialog = false }
+                        else android.widget.Toast.makeText(this@MainActivity, if (isFa) "گروه باید حداقل دو عضو داشته باشد." else "A group needs at least two members.", android.widget.Toast.LENGTH_SHORT).show()
+                    }) { Text(if (isFa) "ذخیره" else "Save") } },
+                    dismissButton = { TextButton(onClick = { groupEditDialog = false }) { Text(if (isFa) "انصراف" else "Cancel") } }
+                )
                 val searchMatches = remember(thread, threadSearchQuery) {
                     if (threadSearchQuery.isBlank()) emptyList() else thread.withIndex().filter { it.value.body.contains(threadSearchQuery, ignoreCase = true) }.take(100)
                 }
@@ -898,6 +924,7 @@ class MainActivity : ComponentActivity() {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = if (outgoing) Arrangement.End else Arrangement.Start) {
                             val isTarget = targetMessage?.let { it.date == row.date && it.address == row.address && it.body == row.body && it.type == row.type } == true
                             Column(Modifier.widthIn(max = 300.dp).background(if (isTarget) Color(0xFFFFE082) else if (outgoing) { if (bgChoice == 3) Color(0xFFD6F5F2) else Color(0xFF124B59) } else Panel, RoundedCornerShape(16.dp)).combinedClickable(onClick = { messageMenu = true }, onLongClick = { messageMenu = true }).padding(12.dp)) {
+                                if (currentNumber.startsWith("group:") && !outgoing) Text(lookupContactName(row.address) ?: row.address, color = Cyan, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                                 val linkText = remember(row.body, isTarget, TextWhite, Cyan) { linkedMessageText(row.body, Cyan) }
                                 ClickableText(
                                     text = linkText,
@@ -927,7 +954,10 @@ class MainActivity : ComponentActivity() {
                     }
                     OutlinedTextField(value = threadMessage, onValueChange = { text -> threadMessage = text; getPreferences(MODE_PRIVATE).edit().putString(draftKey(currentNumber), text).apply() }, modifier = Modifier.weight(1f), textStyle = TextStyle(fontSize = 16.sp * smsFontScale), placeholder = { Text(if (isFa) "نوشتن پیامک..." else "Type a message...") }, maxLines = 4)
                     IconButton(enabled = threadMessage.isNotBlank(), onClick = {
-                        send(currentNumber, threadMessage, subId)
+                        if (currentNumber.startsWith("group:")) {
+                            val group = readInternalGroups().firstOrNull { it.id == currentNumber.removePrefix("group:") }
+                            if (group != null) { group.members.forEach { send(it, threadMessage, subId) }; appendInternalGroupMessage(group.id, threadMessage, System.currentTimeMillis()) }
+                        } else send(currentNumber, threadMessage, subId)
                         threadMessage = ""
                         getPreferences(MODE_PRIVATE).edit().remove(draftKey(currentNumber)).apply()
                         localRefresh++
@@ -968,6 +998,7 @@ class MainActivity : ComponentActivity() {
                         Text(if (isFa) "پیامک جدید" else "New message", color = TextWhite, fontWeight = FontWeight.SemiBold)
                         var suggestions by remember { mutableStateOf(emptyList<ContactSuggestion>()) }
                         var suggestionsExpanded by remember { mutableStateOf(false) }
+                        var newGroupName by remember { mutableStateOf("") }
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             Column(Modifier.weight(1f)) {
                                 OutlinedTextField(
@@ -1021,6 +1052,10 @@ class MainActivity : ComponentActivity() {
                                 contactPicker.launch(Intent(Intent.ACTION_PICK, ContactsContract.CommonDataKinds.Phone.CONTENT_URI))
                             }) { Icon(Icons.Default.Contacts, contentDescription = if (isFa) "انتخاب از دفترچه تلفن" else "Choose contact", tint = Cyan) }
                         }
+                        if (recipientNumber.split(';', ',', '\n').map { it.trim() }.filter { it.any(Char::isDigit) }.distinct().size >= 2) {
+                            OutlinedTextField(value = newGroupName, onValueChange = { newGroupName = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text(if (isFa) "نام گروه (اختیاری)" else "Group name (optional)") })
+                            Text(if (isFa) "این گیرنده‌ها به‌صورت یک گفتگوی گروهی داخلی ذخیره می‌شوند؛ پیامک برای هر عضو جداگانه ارسال می‌شود." else "These recipients will share one in-app group conversation; SMS is sent separately to each member.", color = Muted, style = MaterialTheme.typography.bodySmall)
+                        }
                         OutlinedTextField(value = message, onValueChange = { message = it }, modifier = Modifier.fillMaxWidth(), textStyle = TextStyle(fontSize = 16.sp * smsFontScale), label = { Text(if (isFa) "متن پیام" else "Message text") }, minLines = 2)
                         if (sims.isNotEmpty()) {
                             Text(if (isFa) "سیم‌کارت ارسال" else "Send using SIM", color = Muted, style = MaterialTheme.typography.labelMedium)
@@ -1031,8 +1066,12 @@ class MainActivity : ComponentActivity() {
                             if (targets.isEmpty()) android.widget.Toast.makeText(this@MainActivity, if (isFa) "شماره معتبر وارد کنید." else "Enter a valid recipient number.", android.widget.Toast.LENGTH_SHORT).show()
                             else {
                                 targets.forEach { send(it, message, subId) }
-                                selectedNumber = targets.first()
-                                threadMessage = ""; destination = ""; recipientNumber = ""; message = ""; suggestionsExpanded = false; localRefresh++
+                                if (targets.size >= 2) {
+                                    val group = createInternalGroup(newGroupName.trim().ifBlank { targets.mapNotNull { lookupContactName(it) }.take(2).joinToString(" + ").ifBlank { if (isFa) "گروه پیامکی" else "SMS group" } }, targets)
+                                    appendInternalGroupMessage(group.id, message, System.currentTimeMillis())
+                                    selectedNumber = "group:${group.id}"
+                                } else selectedNumber = targets.first()
+                                threadMessage = ""; destination = ""; recipientNumber = ""; message = ""; newGroupName = ""; suggestionsExpanded = false; showComposer = false; localRefresh++
                                 android.widget.Toast.makeText(this@MainActivity, if (isFa) "پیام برای ${targets.size} مخاطب ارسال شد." else "SMS sent to ${targets.size} recipients.", android.widget.Toast.LENGTH_SHORT).show()
                             }
                         }, modifier = Modifier.fillMaxWidth(), enabled = (recipientNumber.isNotBlank() || destination.isNotBlank()) && message.isNotBlank()) {
@@ -1088,7 +1127,14 @@ class MainActivity : ComponentActivity() {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     LazyRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         item { FilterChip(selected = activeFolder.isBlank(), onClick = { activeFolder = "" }, label = { Text(if (isFa) "همه" else "All") }) }
-                        items(folderNames) { folder -> FilterChip(selected = activeFolder == folder, onClick = { activeFolder = folder }, label = { Text(folder) }) }
+                        items(folderNames) { folder ->
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                                FilterChip(selected = activeFolder == folder, onClick = { activeFolder = folder }, label = { Text(folder) })
+                                IconButton(onClick = { editingFolder = folder; folderNameInput = folder; folderManageDialog = true }) {
+                                    Icon(Icons.Default.Settings, contentDescription = if (isFa) "ویرایش صفحه $folder" else "Edit page $folder", tint = Cyan, modifier = Modifier.size(18.dp))
+                                }
+                            }
+                        }
                     }
                     IconButton(onClick = { folderNameInput = ""; folderDialog = true }) { Icon(Icons.Default.AddCircle, contentDescription = if (isFa) "صفحه جدید" else "New page", tint = Cyan) }
                 }
@@ -1096,6 +1142,33 @@ class MainActivity : ComponentActivity() {
                     text = { OutlinedTextField(value = folderNameInput, onValueChange = { folderNameInput = it }, singleLine = true, label = { Text(if (isFa) "نام صفحه" else "Page name") }) },
                     confirmButton = { TextButton(onClick = { val n = folderNameInput.trim(); if (n.isNotBlank()) { chatFolders = (folderNames + n).distinct().joinToString("|"); chatPrefs.edit().putString("chat_folders", chatFolders).apply(); activeFolder = n }; folderDialog = false }) { Text(if (isFa) "ایجاد" else "Create") } },
                     dismissButton = { TextButton(onClick = { folderDialog = false }) { Text(if (isFa) "انصراف" else "Cancel") } })
+                if (folderManageDialog && editingFolder != null) AlertDialog(
+                    onDismissRequest = { folderManageDialog = false; editingFolder = null },
+                    title = { Text(if (isFa) "مدیریت صفحه" else "Manage page") },
+                    text = { OutlinedTextField(value = folderNameInput, onValueChange = { folderNameInput = it }, singleLine = true, label = { Text(if (isFa) "نام جدید صفحه" else "New page name") }) },
+                    confirmButton = { TextButton(onClick = {
+                        val oldName = editingFolder!!; val newName = folderNameInput.trim()
+                        if (newName.isNotBlank() && newName != oldName && newName !in folderNames) {
+                            val renamed = folderNames.map { if (it == oldName) newName else it }
+                            chatFolders = renamed.joinToString("|")
+                            val editor = chatPrefs.edit().putString("chat_folders", chatFolders)
+                            chatPrefs.all.keys.filter { it.startsWith("folder_") && chatPrefs.getString(it, "") == oldName }.forEach { editor.putString(it, newName) }
+                            editor.apply()
+                            if (activeFolder == oldName) activeFolder = newName
+                        }
+                        folderManageDialog = false; editingFolder = null
+                    }) { Text(if (isFa) "ذخیره نام" else "Save name") } },
+                    dismissButton = { Row {
+                        TextButton(onClick = {
+                            val oldName = editingFolder!!
+                            chatFolders = folderNames.filterNot { it == oldName }.joinToString("|")
+                            val editor = chatPrefs.edit().putString("chat_folders", chatFolders)
+                            chatPrefs.all.keys.filter { it.startsWith("folder_") && chatPrefs.getString(it, "") == oldName }.forEach { editor.remove(it) }
+                            editor.apply(); if (activeFolder == oldName) activeFolder = ""
+                            folderManageDialog = false; editingFolder = null
+                        }) { Text(if (isFa) "حذف صفحه" else "Delete page", color = Color(0xFFE05A5A)) }
+                        TextButton(onClick = { folderManageDialog = false; editingFolder = null }) { Text(if (isFa) "انصراف" else "Cancel") }
+                    } })
                 // Pinned conversations are always sorted before regular conversations.
                 val visibleConversations = conversations.filter { activeFolder.isBlank() || chatPrefs.getString("folder_${it.address}", "") == activeFolder }
                     .sortedWith(compareByDescending<SmsRow> { it.address in pinnedChats }.thenByDescending { it.date })
@@ -1108,7 +1181,8 @@ class MainActivity : ComponentActivity() {
                     Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) { Text(if (isFa) "گفتگویی در این صفحه نیست." else "No conversations in this page.", color = Muted) }
                 } else LazyColumn(state = conversationListState, modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(visibleConversations, key = { "${it.address}-${it.date}" }) { row ->
-                        val displayName = groupedConversations.firstOrNull { it.address == row.address }?.contactName ?: row.address
+                        val groupPreview = if (row.address.startsWith("group:")) readInternalGroups().firstOrNull { it.id == row.address.removePrefix("group:") } else null
+                        val displayName = groupPreview?.name ?: groupedConversations.firstOrNull { it.address == row.address }?.contactName ?: row.address
                         val initials = initialsFor(displayName)
                         val isSelected = row.address in selectedConversations
                         Card(
@@ -1121,7 +1195,7 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onLongClick = {
                                     if (selectionMode) selectedConversations = if (isSelected) selectedConversations - row.address else selectedConversations + row.address
-                                    else showConversationActions(row.address, isFa) { localRefresh++ }
+                                    else showConversationActions(row.address, isFa) { pinnedChats = chatPrefs.getStringSet("pinned_chats", emptySet())?.toSet() ?: emptySet(); localRefresh++ }
                                 }
                             )
                         ) {
@@ -1147,7 +1221,7 @@ class MainActivity : ComponentActivity() {
                                     Spacer(Modifier.width(6.dp))
                                 }
                                 if (row.address in pinnedChats) Icon(Icons.Default.PushPin, contentDescription = if (isFa) "سنجاق‌شده" else "Pinned", tint = Cyan, modifier = Modifier.size(18.dp))
-                                IconButton(onClick = { runCatching { startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:${Uri.encode(row.address)}"))) } }) { Icon(Icons.Default.Call, contentDescription = if (isFa) "تماس" else "Call", tint = Cyan) }
+                                if (!row.address.startsWith("group:")) IconButton(onClick = { runCatching { startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:${Uri.encode(row.address)}"))) } }) { Icon(Icons.Default.Call, contentDescription = if (isFa) "تماس" else "Call", tint = Cyan) }
                             }
                         }
                     }
@@ -1156,6 +1230,39 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+
+    private fun internalGroupPrefs() = getSharedPreferences("sms_guardian_internal_groups", MODE_PRIVATE)
+    private fun readInternalGroups(): List<InternalSmsGroup> = runCatching {
+        val array = JSONArray(internalGroupPrefs().getString("groups", "[]") ?: "[]")
+        (0 until array.length()).mapNotNull { i -> array.optJSONObject(i)?.let { obj ->
+            val members = obj.optJSONArray("members") ?: JSONArray()
+            InternalSmsGroup(obj.optString("id"), obj.optString("name"), (0 until members.length()).map { members.optString(it) }.filter { it.isNotBlank() }, obj.optLong("createdAt"))
+        } }
+    }.getOrDefault(emptyList())
+    private fun saveInternalGroups(groups: List<InternalSmsGroup>) {
+        val array = JSONArray(); groups.forEach { g -> val members = JSONArray(); g.members.forEach { members.put(it) }; array.put(JSONObject().put("id", g.id).put("name", g.name).put("members", members).put("createdAt", g.createdAt)) }
+        internalGroupPrefs().edit().putString("groups", array.toString()).apply()
+    }
+    private fun createInternalGroup(name: String, members: List<String>): InternalSmsGroup {
+        val group = InternalSmsGroup(java.util.UUID.randomUUID().toString(), name, members.distinct(), System.currentTimeMillis())
+        saveInternalGroups(readInternalGroups() + group); return group
+    }
+    private fun updateInternalGroup(id: String, name: String, members: List<String>) { saveInternalGroups(readInternalGroups().map { if (it.id == id) it.copy(name = name, members = members.distinct()) else it }) }
+    private fun appendInternalGroupMessage(id: String, body: String, date: Long) {
+        val prefs = internalGroupPrefs(); val array = runCatching { JSONArray(prefs.getString("messages_$id", "[]") ?: "[]") }.getOrDefault(JSONArray())
+        array.put(JSONObject().put("body", body).put("date", date)); prefs.edit().putString("messages_$id", array.toString()).apply()
+    }
+    private fun groupThreadRows(id: String): List<SmsRow> {
+        val group = readInternalGroups().firstOrNull { it.id == id } ?: return emptyList()
+        val local = runCatching { JSONArray(internalGroupPrefs().getString("messages_$id", "[]") ?: "[]") }.getOrDefault(JSONArray())
+        val rows = (0 until local.length()).mapNotNull { i -> local.optJSONObject(i)?.let { SmsRow("group:$id", it.optString("body"), it.optLong("date"), Telephony.Sms.MESSAGE_TYPE_SENT) } }.toMutableList()
+        val incoming = querySmsRows().filter { it.address in group.members && it.date >= group.createdAt && it.type != Telephony.Sms.MESSAGE_TYPE_SENT && it.type != Telephony.Sms.MESSAGE_TYPE_OUTBOX }
+        rows.addAll(incoming); return rows.sortedBy { it.date }
+    }
+    private fun internalGroupPreviewRows(): List<SmsRow> = readInternalGroups().mapNotNull { group ->
+        val last = groupThreadRows(group.id).maxByOrNull { it.date } ?: return@mapNotNull null
+        last.copy(address = "group:${group.id}")
+    }
 
     private fun showConversationActions(number: String, isFa: Boolean, changed: () -> Unit) {
         val prefs = getSharedPreferences("sms_guardian_chat_organization", MODE_PRIVATE)
@@ -1209,10 +1316,21 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= 26) {
             val manager = getSystemService(android.content.pm.ShortcutManager::class.java)
             if (manager?.isRequestPinShortcutSupported == true) {
+                val display = lookupContactName(number)?.takeIf { it.isNotBlank() } ?: number
+                val mark = if (lookupContactName(number).isNullOrBlank()) number.filter { it.isDigit() }.takeLast(3).ifBlank { number.takeLast(2) } else initialsFor(display).take(3)
+                val bitmap = android.graphics.Bitmap.createBitmap(144, 144, android.graphics.Bitmap.Config.ARGB_8888)
+                val canvas = android.graphics.Canvas(bitmap)
+                val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+                paint.shader = android.graphics.LinearGradient(0f, 0f, 144f, 144f, intArrayOf(0xFF12C9C3.toInt(), 0xFF356BCE.toInt()), null, android.graphics.Shader.TileMode.CLAMP)
+                canvas.drawCircle(72f, 72f, 72f, paint)
+                paint.shader = null; paint.color = android.graphics.Color.WHITE; paint.textAlign = android.graphics.Paint.Align.CENTER
+                paint.typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD); paint.textSize = if (mark.length > 2) 48f else 58f
+                val baseline = 72f - (paint.descent() + paint.ascent()) / 2f
+                canvas.drawText(mark, 72f, baseline, paint)
                 val shortcut = android.content.pm.ShortcutInfo.Builder(this, id)
-                    .setShortLabel((lookupContactName(number) ?: number).take(25))
-                    .setLongLabel(if (isFa) "گفتگو با ${lookupContactName(number) ?: number}" else "Chat with ${lookupContactName(number) ?: number}")
-                    .setIcon(android.graphics.drawable.Icon.createWithResource(this, R.drawable.ic_launcher_minimal))
+                    .setShortLabel(display.take(25))
+                    .setLongLabel(if (isFa) "گفتگو با $display" else "Chat with $display")
+                    .setIcon(android.graphics.drawable.Icon.createWithBitmap(bitmap))
                     .setIntent(intent).build()
                 manager.requestPinShortcut(shortcut, null)
                 return

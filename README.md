@@ -99,3 +99,15 @@ Build fix v1.0.2: removed invalid references to `Manifest.permission.WRITE_SMS`.
 - Replaced the launcher icon with one classic SMS chat-and-envelope icon (no shield).
 - The launcher aliases now all reference the same icon and app label so changing a saved icon selection cannot cause a Myket listing/install icon mismatch.
 - Suggested short English name: SMS Manager.
+
+
+## SMSGuardian 1.2.1
+
+- Fixed pinned conversation refresh: the list reloads the pinned state immediately and scrolls the pinned conversation to the top without restarting the app.
+- Home-screen conversation shortcuts now use a generated contact-initials or phone-digit avatar so shortcuts are visually distinguishable.
+- Custom conversation pages can be renamed or deleted from the page strip. Deleting a page returns its conversations to the All view; messages are not deleted.
+- Multi-recipient compose now creates a persistent internal group conversation. Follow-up messages from that group are sent to all current members; group name and members can be edited by tapping the group header.
+
+### SMS group behavior
+
+This is an in-app SMS group, not carrier Group MMS. The app sends a separate SMS to each member. Incoming SMS from group members after the group was created are shown in the group timeline and labeled by sender. Since ordinary SMS has no group-thread identifier, the app cannot prove that every such incoming message was a reply to that group; unrelated messages from those members may also appear. Group metadata and locally grouped outgoing messages are stored in app preferences.
