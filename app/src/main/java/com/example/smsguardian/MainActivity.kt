@@ -53,6 +53,7 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.FilterAlt
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Forward
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Menu
