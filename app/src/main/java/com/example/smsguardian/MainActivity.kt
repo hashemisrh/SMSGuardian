@@ -64,6 +64,12 @@ import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.ForwardToInbox
+import androidx.compose.material.icons.filled.TextFields
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -707,13 +713,29 @@ class MainActivity : ComponentActivity() {
         Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(bottomStart = 18.dp, bottomEnd = 18.dp)).padding(horizontal = 20.dp, vertical = 18.dp), verticalAlignment = Alignment.CenterVertically) {
             Box {
                 IconButton(onClick = { menuExpanded = true }) { Icon(Icons.Default.Menu, contentDescription = if (isFa) "منو" else "Menu", tint = Cyan) }
-                DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
-                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.ArrowBack, null) }, text = { Text(if (isFa) "بازگشت به گفتگوها" else "Back to chats") }, onClick = { menuExpanded = false; navigate("chats") })
-                    listOf("chats" to (if (isFa) "گفتگوها" else "Chats"), "rules" to (if (isFa) "قوانین بلاک" else "Blocking rules"), "deleted" to (if (isFa) "حذف‌شده‌ها و بلاک‌شده‌ها" else "Deleted & blocked"), "forwarding" to (if (isFa) "فوروارد خودکار پیامک" else "SMS forwarding"), "settings" to (if (isFa) "تنظیمات" else "Settings"), "about" to (if (isFa) "درباره ما" else "About")).forEach { (target, label) ->
-                        DropdownMenuItem(text = { Text(label) }, onClick = { menuExpanded = false; navigate(target) })
+                DropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { menuExpanded = false },
+                    modifier = Modifier.width(292.dp),
+                    shape = RoundedCornerShape(24.dp),
+                    containerColor = Panel,
+                    tonalElevation = 10.dp
+                ) {
+                    Column(Modifier.fillMaxWidth().background(Brush.linearGradient(listOf(Color(0xFF10243D), Color(0xFF087F8C)))).padding(horizontal = 18.dp, vertical = 17.dp)) {
+                        Text(if (isFa) "مدیریت پیامک" else "SMS Guardian", color = Color.White, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleLarge)
+                        Text(if (isFa) "دسترسی سریع به بخش‌های برنامه" else "Quick access to app sections", color = Color.White.copy(alpha = .78f), style = MaterialTheme.typography.bodySmall)
                     }
-                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Settings, null) }, text = { Text(if (isFa) "اندازه قلم چت و پیامک" else "Chat and SMS font size") }, onClick = { menuExpanded = false; showFontSettings = true })
-                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Favorite, null) }, text = { Text(if (isFa) "حمایت مالی / Donate" else "Donate / Support") }, onClick = { menuExpanded = false; showDonate = true })
+                    Spacer(Modifier.height(6.dp))
+                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Home, null, tint = Cyan) }, text = { Text(if (isFa) "گفتگوها" else "Chats", color = TextWhite, fontWeight = FontWeight.Medium) }, onClick = { menuExpanded = false; navigate("chats") }, modifier = Modifier.padding(horizontal = 6.dp))
+                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.FilterAlt, null, tint = Cyan) }, text = { Text(if (isFa) "قوانین و فیلترها" else "Rules & filters", color = TextWhite, fontWeight = FontWeight.Medium) }, onClick = { menuExpanded = false; navigate("rules") }, modifier = Modifier.padding(horizontal = 6.dp))
+                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.DeleteOutline, null, tint = Cyan) }, text = { Text(if (isFa) "حذف‌شده‌ها و بلاک‌شده‌ها" else "Deleted & blocked", color = TextWhite, fontWeight = FontWeight.Medium) }, onClick = { menuExpanded = false; navigate("deleted") }, modifier = Modifier.padding(horizontal = 6.dp))
+                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.ForwardToInbox, null, tint = Cyan) }, text = { Text(if (isFa) "فوروارد خودکار پیامک" else "SMS forwarding", color = TextWhite, fontWeight = FontWeight.Medium) }, onClick = { menuExpanded = false; navigate("forwarding") }, modifier = Modifier.padding(horizontal = 6.dp))
+                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Settings, null, tint = Cyan) }, text = { Text(if (isFa) "تنظیمات برنامه" else "App settings", color = TextWhite, fontWeight = FontWeight.Medium) }, onClick = { menuExpanded = false; navigate("settings") }, modifier = Modifier.padding(horizontal = 6.dp))
+                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Info, null, tint = Cyan) }, text = { Text(if (isFa) "درباره برنامه" else "About", color = TextWhite, fontWeight = FontWeight.Medium) }, onClick = { menuExpanded = false; navigate("about") }, modifier = Modifier.padding(horizontal = 6.dp))
+                    HorizontalDivider(color = Muted.copy(alpha = .2f), modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.TextFields, null, tint = Cyan) }, text = { Text(if (isFa) "اندازه قلم چت و پیامک" else "Chat and SMS font size", color = TextWhite) }, onClick = { menuExpanded = false; showFontSettings = true }, modifier = Modifier.padding(horizontal = 6.dp))
+                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Favorite, null, tint = Color(0xFFE879A8)) }, text = { Text(if (isFa) "حمایت از توسعه برنامه" else "Support development", color = TextWhite) }, onClick = { menuExpanded = false; showDonate = true }, modifier = Modifier.padding(horizontal = 6.dp))
+                    Spacer(Modifier.height(5.dp))
                 }
             }
             Spacer(Modifier.width(12.dp))
@@ -766,6 +788,8 @@ class MainActivity : ComponentActivity() {
         var folderNameInput by remember { mutableStateOf("") }
         var editingFolder by remember { mutableStateOf<String?>(null) }
         var folderManageDialog by remember { mutableStateOf(false) }
+        var pageMenuFolder by remember { mutableStateOf<String?>(null) }
+        var deletingFolder by remember { mutableStateOf<String?>(null) }
         var showComposer by remember { mutableStateOf(false) }
         var targetMessage by remember { mutableStateOf<SmsRow?>(null) }
         var appliedChatSearch by remember { mutableStateOf("") }
@@ -1126,13 +1150,26 @@ class MainActivity : ComponentActivity() {
                         dismissButton = { Row { folderNames.forEach { folder -> TextButton(onClick = { selectedConversations.forEach { chatPrefs.edit().putString("folder_$it", folder).apply() }; activeFolder = folder; selectedConversations = emptySet(); selectionMode = false; moveDialog = false }) { Text(folder) } } } })
                 }
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    LazyRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    LazyRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
                         item { FilterChip(selected = activeFolder.isBlank(), onClick = { activeFolder = "" }, label = { Text(if (isFa) "همه" else "All") }) }
                         items(folderNames) { folder ->
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                                FilterChip(selected = activeFolder == folder, onClick = { activeFolder = folder }, label = { Text(folder) })
-                                IconButton(onClick = { editingFolder = folder; folderNameInput = folder; folderManageDialog = true }) {
-                                    Icon(Icons.Default.Settings, contentDescription = if (isFa) "ویرایش صفحه $folder" else "Edit page $folder", tint = Cyan, modifier = Modifier.size(18.dp))
+                            Box {
+                                Surface(
+                                    onClick = { activeFolder = folder },
+                                    shape = RoundedCornerShape(50),
+                                    color = if (activeFolder == folder) Cyan.copy(alpha = .18f) else Panel,
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, if (activeFolder == folder) Cyan else Muted.copy(alpha = .25f))
+                                ) {
+                                    Row(Modifier.padding(start = 13.dp, end = 4.dp, top = 2.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Text(folder, color = if (activeFolder == folder) Cyan else TextWhite, style = MaterialTheme.typography.labelLarge)
+                                        IconButton(onClick = { pageMenuFolder = folder }) {
+                                            Icon(Icons.Default.MoreVert, contentDescription = if (isFa) "مدیریت صفحه $folder" else "Manage $folder", tint = if (activeFolder == folder) Cyan else Muted, modifier = Modifier.size(19.dp))
+                                        }
+                                    }
+                                }
+                                DropdownMenu(expanded = pageMenuFolder == folder, onDismissRequest = { pageMenuFolder = null }, shape = RoundedCornerShape(16.dp), containerColor = Panel) {
+                                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Edit, null, tint = Cyan) }, text = { Text(if (isFa) "تغییر نام صفحه" else "Rename page") }, onClick = { pageMenuFolder = null; editingFolder = folder; folderNameInput = folder; folderManageDialog = true })
+                                    DropdownMenuItem(leadingIcon = { Icon(Icons.Default.DeleteOutline, null, tint = Color(0xFFE05A5A)) }, text = { Text(if (isFa) "حذف صفحه" else "Delete page") }, onClick = { pageMenuFolder = null; deletingFolder = folder })
                                 }
                             }
                         }
@@ -1159,17 +1196,22 @@ class MainActivity : ComponentActivity() {
                         }
                         folderManageDialog = false; editingFolder = null
                     }) { Text(if (isFa) "ذخیره نام" else "Save name") } },
-                    dismissButton = { Row {
-                        TextButton(onClick = {
-                            val oldName = editingFolder!!
-                            chatFolders = folderNames.filterNot { it == oldName }.joinToString("|")
-                            val editor = chatPrefs.edit().putString("chat_folders", chatFolders)
-                            chatPrefs.all.keys.filter { it.startsWith("folder_") && chatPrefs.getString(it, "") == oldName }.forEach { editor.remove(it) }
-                            editor.apply(); if (activeFolder == oldName) activeFolder = ""
-                            folderManageDialog = false; editingFolder = null
-                        }) { Text(if (isFa) "حذف صفحه" else "Delete page", color = Color(0xFFE05A5A)) }
-                        TextButton(onClick = { folderManageDialog = false; editingFolder = null }) { Text(if (isFa) "انصراف" else "Cancel") }
-                    } })
+                    dismissButton = { TextButton(onClick = { folderManageDialog = false; editingFolder = null }) { Text(if (isFa) "انصراف" else "Cancel") } })
+                if (deletingFolder != null) AlertDialog(
+                    onDismissRequest = { deletingFolder = null },
+                    title = { Text(if (isFa) "حذف صفحه؟" else "Delete page?") },
+                    text = { Text(if (isFa) "صفحه «${deletingFolder}» حذف می‌شود. گفتگوها حذف نمی‌شوند و به بخش همه منتقل خواهند شد." else "The page '${deletingFolder}' will be deleted. Its conversations will remain under All.") },
+                    confirmButton = { TextButton(onClick = {
+                        val oldName = deletingFolder!!
+                        chatFolders = folderNames.filterNot { it == oldName }.joinToString("|")
+                        val editor = chatPrefs.edit().putString("chat_folders", chatFolders)
+                        chatPrefs.all.keys.filter { it.startsWith("folder_") && chatPrefs.getString(it, "") == oldName }.forEach { editor.remove(it) }
+                        editor.apply()
+                        if (activeFolder == oldName) activeFolder = ""
+                        deletingFolder = null
+                    }) { Text(if (isFa) "حذف صفحه" else "Delete page", color = Color(0xFFE05A5A)) } },
+                    dismissButton = { TextButton(onClick = { deletingFolder = null }) { Text(if (isFa) "انصراف" else "Cancel") } }
+                )
                 // Pinned conversations are always sorted before regular conversations.
                 val visibleConversations = conversations.filter { activeFolder.isBlank() || chatPrefs.getString("folder_${it.address}", "") == activeFolder }
                     .sortedWith(compareByDescending<SmsRow> { it.address in pinnedChats }.thenByDescending { it.date })
@@ -1249,6 +1291,17 @@ class MainActivity : ComponentActivity() {
         saveInternalGroups(readInternalGroups() + group); return group
     }
     private fun updateInternalGroup(id: String, name: String, members: List<String>) { saveInternalGroups(readInternalGroups().map { if (it.id == id) it.copy(name = name, members = members.distinct()) else it }) }
+    private fun deleteInternalGroup(id: String) {
+        if (id.isBlank()) return
+        saveInternalGroups(readInternalGroups().filterNot { it.id == id })
+        internalGroupPrefs().edit().remove("messages_$id").apply()
+        val organization = getSharedPreferences("sms_guardian_chat_organization", MODE_PRIVATE)
+        val key = "group:$id"
+        val editor = organization.edit().remove("folder_$key")
+        val pinned = organization.getStringSet("pinned_chats", emptySet())?.toMutableSet() ?: mutableSetOf()
+        pinned.remove(key)
+        editor.putStringSet("pinned_chats", pinned).apply()
+    }
     private fun appendInternalGroupMessage(id: String, body: String, date: Long) {
         val prefs = internalGroupPrefs(); val array = runCatching { JSONArray(prefs.getString("messages_$id", "[]") ?: "[]") }.getOrDefault(JSONArray())
         array.put(JSONObject().put("body", body).put("date", date)); prefs.edit().putString("messages_$id", array.toString()).apply()
@@ -1345,12 +1398,20 @@ class MainActivity : ComponentActivity() {
         if (uniqueNumbers.isEmpty()) return
         android.app.AlertDialog.Builder(this)
             .setTitle(if (isFa) "حذف ${uniqueNumbers.size} گفتگو؟" else "Delete ${uniqueNumbers.size} conversations?")
-            .setMessage(if (isFa) "تمام پیامک‌های گفتگوهای انتخاب‌شده از صندوق پیامک حذف می‌شوند و نسخه‌ای در بخش حذف‌شده‌ها نگهداری می‌شود." else "All SMS messages in the selected conversations will be deleted from the SMS provider and archived in Deleted messages.")
+            .setMessage(if (uniqueNumbers.all { it.startsWith("group:") }) {
+                if (isFa) "گروه‌های انتخاب‌شده و پیام‌های داخلی آن‌ها حذف می‌شوند؛ پیامک‌های اصلی اعضا باقی می‌مانند." else "The selected group conversations and their internal messages will be removed. Original member SMS messages will remain."
+            } else if (uniqueNumbers.any { it.startsWith("group:") }) {
+                if (isFa) "گفتگوهای عادی و پیامک‌های آن‌ها حذف و بایگانی می‌شوند؛ گروه‌های انتخاب‌شده حذف می‌شوند، اما پیامک‌های اصلی اعضای گروه باقی می‌مانند." else "Regular conversations will be deleted and archived. Selected groups will be removed, while original member SMS messages remain."
+            } else {
+                if (isFa) "تمام پیامک‌های گفتگوهای انتخاب‌شده از صندوق پیامک حذف می‌شوند و نسخه‌ای در بخش حذف‌شده‌ها نگهداری می‌شود." else "All SMS messages in the selected conversations will be deleted from the SMS provider and archived in Deleted messages."
+            })
             .setNegativeButton(if (isFa) "انصراف" else "Cancel", null)
             .setPositiveButton(if (isFa) "حذف" else "Delete") { _, _ ->
+                val groupIds = uniqueNumbers.filter { it.startsWith("group:") }.map { it.removePrefix("group:") }
+                val smsNumbers = uniqueNumbers.filterNot { it.startsWith("group:") }
                 val currentRows = cachedSmsRows ?: emptyList()
                 val allRows = cachedAllSmsRows ?: currentRows
-                val archiveRows = allRows.filter { it.address in uniqueNumbers }
+                val archiveRows = allRows.filter { it.address in smsNumbers }
                 cachedSmsRows = currentRows.filterNot { it.address in uniqueNumbers }
                 cachedAllSmsRows = cachedAllSmsRows?.filterNot { it.address in uniqueNumbers }
                 cachedConversationPreviews = null
@@ -1358,11 +1419,12 @@ class MainActivity : ComponentActivity() {
                 lifecycleScope.launch {
                     val result = withContext(Dispatchers.IO) {
                         runCatching {
-                            val fullHistory = uniqueNumbers.flatMap { number -> querySmsRows(address = number) }
+                            val fullHistory = smsNumbers.flatMap { number -> querySmsRows(address = number) }
                             archiveDeletedMessages(if (fullHistory.isNotEmpty()) fullHistory else archiveRows)
-                            uniqueNumbers.forEach { number ->
+                            smsNumbers.forEach { number ->
                                 contentResolver.delete(Telephony.Sms.CONTENT_URI, "address = ?", arrayOf(number))
                             }
+                            groupIds.forEach { deleteInternalGroup(it) }
                         }
                     }
                     result.onSuccess {
@@ -1383,6 +1445,22 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun confirmDeleteConversation(number: String, isFa: Boolean, changed: () -> Unit) {
+        if (number.startsWith("group:")) {
+            val groupId = number.removePrefix("group:")
+            android.app.AlertDialog.Builder(this)
+                .setTitle(if (isFa) "حذف گفتگوی گروهی؟" else "Delete group conversation?")
+                .setMessage(if (isFa) "این گروه و پیام‌های داخلی آن از فهرست گفتگوها حذف می‌شود. پیامک‌های اصلی اعضا در صندوق پیامک باقی می‌مانند." else "This group and its internal messages will be removed. Original SMS messages belonging to its members will remain in the inbox.")
+                .setNegativeButton(if (isFa) "انصراف" else "Cancel", null)
+                .setPositiveButton(if (isFa) "حذف گروه" else "Delete group") { _, _ ->
+                    deleteInternalGroup(groupId)
+                    cachedSmsRows = cachedSmsRows?.filterNot { it.address == number }
+                    cachedAllSmsRows = cachedAllSmsRows?.filterNot { it.address == number }
+                    cachedConversationPreviews = null
+                    changed()
+                    android.widget.Toast.makeText(this, if (isFa) "گفتگوی گروهی حذف شد" else "Group conversation deleted", android.widget.Toast.LENGTH_SHORT).show()
+                }.show()
+            return
+        }
         android.app.AlertDialog.Builder(this).setTitle(if (isFa) "حذف گفتگو؟" else "Delete conversation?")
             .setMessage(if (isFa) "تمام پیامک‌های این شماره از صندوق پیامک حذف می‌شوند." else "All SMS messages for this number will be deleted from the SMS provider.")
             .setNegativeButton(if (isFa) "انصراف" else "Cancel", null)
