@@ -65,9 +65,7 @@
         <receiver android:name=".SmsForwardingReceiver" android:exported="true" android:permission="android.permission.BROADCAST_SMS">
             <intent-filter android:priority="800"><action android:name="android.provider.Telephony.SMS_RECEIVED" /></intent-filter>
         </receiver>
-        <receiver android:name=".SmsForwardingSentReceiver" android:exported="false">
-            <intent-filter><action android:name="com.example.smsguardian.FORWARD_SMS_SENT" /></intent-filter>
-        </receiver>
+        <receiver android:name=".SmsForwardingResultReceiver" android:exported="false" />
         <receiver android:name=".SmsForwardingBootReceiver" android:exported="true">
             <intent-filter><action android:name="android.intent.action.BOOT_COMPLETED" /><action android:name="android.intent.action.MY_PACKAGE_REPLACED" /></intent-filter>
         </receiver>

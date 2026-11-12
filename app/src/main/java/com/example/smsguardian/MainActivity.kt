@@ -32,8 +32,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
@@ -287,12 +286,8 @@ class MainActivity : ComponentActivity() {
     }
 
     fun requestDefaultSmsRole() {
-        // The old button appeared inactive when the app already held the SMS role:
-        // Android does not show the role dialog again, so use the click to repair/check permissions.
         if (isDefaultSmsApp()) {
-            requestNonSmsPermissions()
-            smsRoleRefreshSignal++
-            android.widget.Toast.makeText(this, "مدیریت پیامک از قبل برنامه پیش‌فرض است؛ وضعیت مجوزهای پیامک بررسی شد.", android.widget.Toast.LENGTH_LONG).show()
+            android.widget.Toast.makeText(this, "مدیریت پیامک هم‌اکنون برنامه پیامک پیش‌فرض گوشی است.", android.widget.Toast.LENGTH_LONG).show()
             return
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -300,8 +295,7 @@ class MainActivity : ComponentActivity() {
             if (manager.isRoleAvailable(RoleManager.ROLE_SMS)) {
                 roleLauncher.launch(manager.createRequestRoleIntent(RoleManager.ROLE_SMS))
             } else {
-                runCatching { startActivity(Intent(android.provider.Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS)) }
-                    .onFailure { android.widget.Toast.makeText(this, "باز کردن تنظیمات برنامه‌های پیش‌فرض ممکن نشد.", android.widget.Toast.LENGTH_LONG).show() }
+                android.widget.Toast.makeText(this, "نقش پیامک پیش‌فرض در این دستگاه در دسترس نیست.", android.widget.Toast.LENGTH_LONG).show()
             }
         } else {
             @Suppress("DEPRECATION")
@@ -635,8 +629,7 @@ class MainActivity : ComponentActivity() {
         var page by remember { mutableStateOf("chats") }
         var bgChoice by remember { mutableIntStateOf(getPreferences(MODE_PRIVATE).getInt("bg_choice", 3)) }
         var chatFontScale by remember { mutableFloatStateOf(getPreferences(MODE_PRIVATE).getFloat("chat_font_scale", 1.0f).coerceIn(0.8f, 1.5f)) }
-        var smsFontScale by remember { mutableFloatStateOf(getPreferences(MODE_PRIVATE).getFloat("sms_font_scale", 1.0f).coerceIn(0.65f, 2.0f)) }
-        var launcherIconChoice by remember { mutableIntStateOf(getPreferences(MODE_PRIVATE).getInt("launcher_icon_choice", 3)) }
+        var smsFontScale by remember { mutableFloatStateOf(getPreferences(MODE_PRIVATE).getFloat("sms_font_scale", 1.0f).coerceIn(0.8f, 1.5f)) }
         val appBg = when (bgChoice) {
             1 -> Color(0xFF24152F) // Purple
             2 -> Color(0xFF102A24) // Forest
@@ -662,19 +655,13 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(smsRoleRefreshSignal) { refresh++ }
         LaunchedEffect(Unit) {
             val migration = getPreferences(MODE_PRIVATE)
-            // Minimal is the default only on a truly fresh install. Never overwrite
-            // a previously saved user's launcher icon when the app starts/upgrades.
-            if (!migration.getBoolean("minimal_icon_default_applied", false)) {
-                if (!migration.contains("launcher_icon_choice")) {
-                    setLauncherIcon(3)
-                    launcherIconChoice = 3
-                } else {
-                    launcherIconChoice = migration.getInt("launcher_icon_choice", 3).coerceIn(0, 3)
-                    setLauncherIcon(launcherIconChoice)
-                }
-                migration.edit().putBoolean("minimal_icon_default_applied", true).apply()
-            } else {
-                launcherIconChoice = migration.getInt("launcher_icon_choice", 3).coerceIn(0, 3)
+            // App Icon customization was removed from Settings in 1.2.3.
+            // Apply Minimal once on upgrade so every installation has the same launcher icon.
+            if (!migration.getBoolean("minimal_icon_v123_applied", false)) {
+                setLauncherIcon(3)
+                migration.edit().putInt("launcher_icon_choice", 3)
+                    .putBoolean("minimal_icon_default_applied", true)
+                    .putBoolean("minimal_icon_v123_applied", true).apply()
             }
         }
         val isFa = language == "fa"
@@ -691,17 +678,20 @@ class MainActivity : ComponentActivity() {
                             chatFontScale, smsFontScale,
                             { chatValue, smsValue ->
                                 chatFontScale = chatValue.coerceIn(0.8f, 1.5f)
-                                smsFontScale = smsValue.coerceIn(0.65f, 2.0f)
+                                smsFontScale = smsValue.coerceIn(0.8f, 1.5f)
                                 getPreferences(MODE_PRIVATE).edit().putFloat("chat_font_scale", chatFontScale).putFloat("sms_font_scale", smsFontScale).apply()
                             }
                         )
                         when (page) {
                             "rules" -> RulesPage(isFa, refresh) { refresh++ }
                             "forwarding" -> SmsForwardingPage(isFa)
-                            "settings" -> SettingsPage(isFa, language, { language = it; getPreferences(MODE_PRIVATE).edit().putString("language", it).apply() }, { requestDefaultSmsRole() }, bgChoice) { choice -> bgChoice = choice; getPreferences(MODE_PRIVATE).edit().putInt("bg_choice", choice).apply() }
+                            "settings" -> SettingsPage(isFa, language, { language = it; getPreferences(MODE_PRIVATE).edit().putString("language", it).apply() }, { requestDefaultSmsRole() }, bgChoice, { choice -> bgChoice = choice; getPreferences(MODE_PRIVATE).edit().putInt("bg_choice", choice).apply() })
                             "about" -> AboutPage(isFa)
                             "deleted" -> DeletedMessagesPage(isFa, refresh) { refresh++ }
-                            else -> ChatsPage(isFa, refresh, bgChoice, chatFontScale, smsFontScale, ::getSmsRows, ::sendSms)
+                            else -> ChatsPage(isFa, refresh, bgChoice, chatFontScale, smsFontScale, ::getSmsRows, ::sendSms) { scale ->
+                                smsFontScale = scale.coerceIn(0.75f, 1.8f)
+                                getPreferences(MODE_PRIVATE).edit().putFloat("sms_font_scale", smsFontScale).apply()
+                            }
                         }
                         NavigationBar(modifier = Modifier.navigationBarsPadding(), containerColor = Color(0xFF0A172A), contentColor = TextWhite) {
                             NavigationBarItem(selected = page == "chats", onClick = { page = "chats" }, icon = { Icon(Icons.Default.Chat, null) }, label = { Text(if (isFa) "گفتگوها" else "Chats") })
@@ -735,18 +725,17 @@ class MainActivity : ComponentActivity() {
                     containerColor = Panel,
                     tonalElevation = 10.dp
                 ) {
-                    Row(
-                        Modifier.fillMaxWidth().background(Brush.linearGradient(listOf(Color(0xFF10243D), Color(0xFF087F8C)))).padding(horizontal = 18.dp, vertical = 18.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(13.dp)
-                    ) {
-                        Box(Modifier.size(48.dp).background(Color.White.copy(alpha = .16f), CircleShape), contentAlignment = Alignment.Center) {
-                            Icon(Icons.Default.Chat, null, tint = Color.White, modifier = Modifier.size(27.dp))
+                    Column(Modifier.fillMaxWidth().background(Brush.linearGradient(listOf(Color(0xFF10243D), Color(0xFF087F8C)))).padding(horizontal = 18.dp, vertical = 17.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Box(Modifier.size(48.dp).background(Color.White.copy(alpha = .16f), CircleShape), contentAlignment = Alignment.Center) {
+                                Icon(Icons.Default.Chat, null, tint = Color.White, modifier = Modifier.size(27.dp))
+                            }
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text("مدیریت پیامک", color = Color.White, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleLarge)
+                                Text(if (isFa) "مدیریت هوشمند پیامک‌ها" else "Smart message management", color = Color.White.copy(alpha = .82f), style = MaterialTheme.typography.bodySmall)
+                            }
                         }
-                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                            Text("مدیریت پیامک", color = Color.White, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleLarge)
-                            Text(if (isFa) "مدیریت یکپارچه پیامک‌ها" else "Your messages, organized", color = Color.White.copy(alpha = .82f), style = MaterialTheme.typography.bodySmall)
-                        }
+                        Text(if (isFa) "دسترسی سریع به بخش‌های برنامه  •  نسخه 1.2.3" else "Quick access to app sections  •  Version 1.2.3", color = Color.White.copy(alpha = .72f), style = MaterialTheme.typography.labelSmall)
                     }
                     Spacer(Modifier.height(6.dp))
                     DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Home, null, tint = Cyan) }, text = { Text(if (isFa) "گفتگوها" else "Chats", color = TextWhite, fontWeight = FontWeight.Medium) }, onClick = { menuExpanded = false; navigate("chats") }, modifier = Modifier.padding(horizontal = 6.dp))
@@ -764,7 +753,7 @@ class MainActivity : ComponentActivity() {
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text("مدیریت پیامک", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = TextWhite)
-                Text(if (page == "chats") { if (isFa) "پیام‌رسان و مدیر هوشمند پیامک" else "Smart SMS manager" } else if (page == "rules") { if (isFa) "مدیریت قوانین هوشمند" else "Smart filtering rules" } else if (page == "forwarding") { if (isFa) "ارسال خودکار پیامک‌های مطابق شرط" else "Automatically forward matching SMS" } else { if (isFa) "شخصی‌سازی برنامه" else "Personalize your app" }, color = Muted, style = MaterialTheme.typography.bodySmall)
+                Text(if (page == "chats") "Messenger; But Lovely" else if (page == "rules") { if (isFa) "مدیریت قوانین هوشمند" else "Smart filtering rules" } else if (page == "forwarding") { if (isFa) "ارسال خودکار پیامک‌های مطابق شرط" else "Automatically forward matching SMS" } else { if (isFa) "شخصی‌سازی برنامه" else "Personalize your app" }, color = Muted, style = MaterialTheme.typography.bodySmall)
             }
             Icon(Icons.Default.Language, null, tint = Cyan, modifier = Modifier.clickable(onClick = toggleLanguage).padding(8.dp))
         }
@@ -776,7 +765,7 @@ class MainActivity : ComponentActivity() {
                     Text(if (isFa) "اندازه متن گفتگوها: ${(chatFontScale * 100).toInt()}٪" else "Chat list text: ${(chatFontScale * 100).toInt()}%")
                     Slider(value = chatFontScale, onValueChange = { onFontScalesChanged(it, smsFontScale) }, valueRange = 0.8f..1.5f, steps = 6)
                     Text(if (isFa) "اندازه متن پیامک‌ها: ${(smsFontScale * 100).toInt()}٪" else "SMS text: ${(smsFontScale * 100).toInt()}%")
-                    Slider(value = smsFontScale, onValueChange = { onFontScalesChanged(chatFontScale, it) }, valueRange = 0.65f..2.0f, steps = 8)
+                    Slider(value = smsFontScale, onValueChange = { onFontScalesChanged(chatFontScale, it) }, valueRange = 0.8f..1.5f, steps = 6)
                 }
             },
             confirmButton = { TextButton(onClick = { showFontSettings = false }) { Text(if (isFa) "تمام" else "Done") } },
@@ -794,7 +783,7 @@ class MainActivity : ComponentActivity() {
         )
     }
 
-    @Composable private fun ChatsPage(isFa: Boolean, refresh: Int, bgChoice: Int, chatFontScale: Float, smsFontScale: Float, loadRows: () -> List<SmsRow>, send: (String, String, Int?) -> Unit) {
+    @Composable private fun ChatsPage(isFa: Boolean, refresh: Int, bgChoice: Int, chatFontScale: Float, smsFontScale: Float, loadRows: () -> List<SmsRow>, send: (String, String, Int?) -> Unit, onSmsFontScaleChanged: (Float) -> Unit) {
         var rows by remember { mutableStateOf(emptyList<SmsRow>()) }
         var initialLoadComplete by remember { mutableStateOf(false) }
         var destination by remember { mutableStateOf("") }
@@ -889,7 +878,15 @@ class MainActivity : ComponentActivity() {
                 }
             }
             val thread = loadedThreadRows ?: emptyList()
-            Column(Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                Modifier.fillMaxSize().padding(horizontal = 12.dp)
+                    .pointerInput(currentNumber, smsFontScale) {
+                        detectTransformGestures { _, _, zoom, _ ->
+                            if (zoom != 1f) onSmsFontScaleChanged((smsFontScale * zoom).coerceIn(0.75f, 1.8f))
+                        }
+                    },
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = { getPreferences(MODE_PRIVATE).edit().putString(draftKey(currentNumber), threadMessage).apply(); markConversationRead(currentNumber); selectedNumber = null; targetMessage = null; localRefresh++ }) { Icon(Icons.Default.ArrowBack, contentDescription = if (isFa) "بازگشت" else "Back", tint = Cyan) }
                     Column(Modifier.weight(1f).then(if (currentNumber.startsWith("group:")) Modifier.clickable {
@@ -965,37 +962,7 @@ class MainActivity : ComponentActivity() {
                         else threadListState.scrollToItem(thread.lastIndex)
                     }
                 }
-                val latestSmsFontScale by rememberUpdatedState(smsFontScale)
-                val latestChatFontScale by rememberUpdatedState(chatFontScale)
-                val latestFontScaleCallback by rememberUpdatedState(onFontScalesChanged)
-                LazyColumn(
-                    state = threadListState,
-                    modifier = Modifier.weight(1f).fillMaxWidth().pointerInput(Unit) {
-                        awaitEachGesture {
-                            awaitFirstDown(requireUnconsumed = false)
-                            var previousSpan = 0f
-                            do {
-                                val event = awaitPointerEvent()
-                                val pressed = event.changes.filter { it.pressed }
-                                if (pressed.size >= 2) {
-                                    val dx = pressed[0].position.x - pressed[1].position.x
-                                    val dy = pressed[0].position.y - pressed[1].position.y
-                                    val span = kotlin.math.sqrt((dx * dx + dy * dy).toDouble()).toFloat()
-                                    if (previousSpan > 0f && span > 0f) {
-                                        val zoom = (span / previousSpan).coerceIn(0.85f, 1.18f)
-                                        latestFontScaleCallback(latestChatFontScale, (latestSmsFontScale * zoom).coerceIn(0.65f, 2.0f))
-                                    }
-                                    previousSpan = span
-                                    pressed.forEach { it.consume() }
-                                } else {
-                                    previousSpan = 0f
-                                }
-                            } while (event.changes.any { it.pressed })
-                        }
-                    },
-                    reverseLayout = false,
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
+                LazyColumn(state = threadListState, modifier = Modifier.weight(1f).fillMaxWidth(), reverseLayout = false, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(thread, key = { "${it.address}-${it.date}-${it.type}" }) { row ->
                         val outgoing = row.type == Telephony.Sms.MESSAGE_TYPE_SENT || row.type == Telephony.Sms.MESSAGE_TYPE_OUTBOX
                         var messageMenu by remember { mutableStateOf(false) }
@@ -1822,24 +1789,10 @@ class MainActivity : ComponentActivity() {
                 Column(Modifier.fillMaxWidth().background(Brush.linearGradient(listOf(Color(0xFF173C59), Color(0xFF10283F)))).padding(22.dp), verticalArrangement = Arrangement.spacedBy(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Box(Modifier.size(76.dp).background(Brush.linearGradient(listOf(Cyan, Color(0xFF356BCE))), CircleShape), contentAlignment = Alignment.Center) { Icon(Icons.Default.Chat, null, tint = Color.White, modifier = Modifier.size(38.dp)) }
                     Text("مدیریت پیامک", color = Color.White, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                    Text(if (isFa) "مدیریت هوشمند پیامک‌ها، فیلتر و کنترل گفتگوها" else "Smart SMS management, filtering and conversation control", color = Color.White.copy(alpha = 0.88f))
-                    Text("Version ${runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: "1.2.3"}", color = Color.White.copy(alpha = 0.85f), style = MaterialTheme.typography.labelMedium)
+                    Text(if (isFa) "همه پیامک‌ها؛ هوشمند، سریع و تحت کنترل شما" else "Your messages, smarter, faster and in your control", color = Color.White.copy(alpha = 0.92f), fontWeight = FontWeight.Medium)
+                    Text(if (isFa) "ارسال • دریافت • فیلتر • فوروارد" else "Send • Receive • Filter • Forward", color = Color.White.copy(alpha = 0.72f), style = MaterialTheme.typography.labelMedium)
+                    Text("Version ${runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: "1.1.1"}", color = Color.White.copy(alpha = 0.85f), style = MaterialTheme.typography.labelMedium)
                     AssistChip(onClick = {}, colors = AssistChipDefaults.assistChipColors(containerColor = Color.White.copy(alpha = 0.14f), labelColor = Color.White, leadingIconContentColor = Color.White), label = { Text(if (isFa) "حریم خصوصی؛ اطلاعات روی دستگاه شما" else "Privacy-minded · on-device rules") }, leadingIcon = { Icon(Icons.Default.Settings, null) })
-                }
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(
-                    Triple(Icons.Default.Chat, if (isFa) "گفتگوها" else "Chats", if (isFa) "ارسال و دریافت" else "Send & receive"),
-                    Triple(Icons.Default.FilterAlt, if (isFa) "فیلتر هوشمند" else "Smart rules", if (isFa) "کنترل پیام‌ها" else "Message control"),
-                    Triple(Icons.Default.ForwardToInbox, if (isFa) "فوروارد" else "Forwarding", if (isFa) "خودکار و شرطی" else "Automatic")
-                ).forEach { item ->
-                    Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(18.dp), modifier = Modifier.weight(1f)) {
-                        Column(Modifier.fillMaxWidth().padding(vertical = 14.dp, horizontal = 7.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                            Icon(item.first, null, tint = Cyan, modifier = Modifier.size(23.dp))
-                            Text(item.second, color = aboutCardText, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
-                            Text(item.third, color = aboutMuted, style = MaterialTheme.typography.labelSmall, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                        }
-                    }
                 }
             }
             Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
@@ -1854,12 +1807,14 @@ class MainActivity : ComponentActivity() {
                         if (isFa) "نمایش پیامک‌های حذف‌شده و بازیابی آرشیو" else "Deleted-message archive and restoration",
                         if (isFa) "لینک‌های قابل کلیک، پیش‌نویس خودکار و وضعیت ارسال/تحویل با تیک" else "Clickable links, saved drafts, and sent/delivered checkmarks",
                         if (isFa) "انتخاب مخاطب از دفترچه تلفن، افزودن مخاطب و انتخاب سیم‌کارت" else "Contact picker, add-contact shortcut, and SIM selection",
-                        if (isFa) "انتخاب رنگ زمینه و زبان برنامه" else "Custom background themes and app language",
+                        if (isFa) "انتخاب رنگ و زبان برنامه با آیکون مینیمال ثابت و پیش‌فرض" else "Custom themes and language with a clean Minimal launcher icon",
                         if (isFa) "سنجاق‌کردن گفتگوها و ساخت میانبر برای دسترسی سریع از صفحه اصلی" else "Pin conversations and create home-screen shortcuts",
                         if (isFa) "ساخت صفحه‌های شخصی مانند خانواده، دوستان و همکاران برای دسته‌بندی گفتگوها" else "Organize chats into custom pages such as Family, Friends, and Work",
                         if (isFa) "ارسال یک پیامک به چند شماره و مدیریت مقصدهای فوروارد به‌صورت مستقل" else "Send an SMS to multiple recipients and independently enable forwarding destinations",
                         if (isFa) "انتخاب و حذف گروهی پیامک‌های آرشیوشده" else "Bulk selection and deletion of archived messages",
                         if (isFa) "با لمس هر قسمت حباب پیامک، کپی و فوروارد در دسترس است" else "Tap anywhere on a message bubble to access copy and forwarding actions",
+                        if (isFa) "انتخاب سیم‌کارت مشخص برای فوروارد خودکار در گوشی‌های دو سیم‌کارته و ثبت نتیجه واقعی ارسال" else "Choose a specific SIM for automatic forwarding on dual-SIM phones and track actual send results",
+                        if (isFa) "بزرگ‌نمایی و کوچک‌نمایی متن پیام‌ها با حرکت دو انگشت" else "Pinch-to-zoom message text with two fingers",
                         if (isFa) "اعلان پیامک جدید و تنظیمات فوروارد" else "New-message notifications and forwarding settings"
                     ).forEach { item -> Row(verticalAlignment = Alignment.Top) { Icon(Icons.Default.Check, null, tint = Cyan, modifier = Modifier.size(20.dp)); Spacer(Modifier.width(10.dp)); Text(item, color = aboutCardText) } }
                 }
@@ -1888,6 +1843,26 @@ class MainActivity : ComponentActivity() {
         var last by remember { mutableStateOf(prefs.getString("last", "") ?: "") }
         var reportTitle by remember { mutableStateOf("") }
         var reportBody by remember { mutableStateOf("") }
+        var selectedForwardSubId by remember { mutableIntStateOf(prefs.getInt("subscription_id", -1)) }
+        var availableForwardSims by remember { mutableStateOf(emptyList<Pair<Int, String>>()) }
+        LaunchedEffect(Unit) {
+            if (Build.VERSION.SDK_INT >= 22 && ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) {
+                availableForwardSims = runCatching {
+                    SubscriptionManager.from(this@MainActivity).activeSubscriptionInfoList.orEmpty()
+                        .sortedBy { it.simSlotIndex }
+                        .map { info ->
+                            val simLabel = info.displayName?.toString()?.takeIf { it.isNotBlank() }
+                                ?: info.carrierName?.toString()?.takeIf { it.isNotBlank() }
+                                ?: "SIM ${info.simSlotIndex + 1}"
+                            info.subscriptionId to "SIM ${info.simSlotIndex + 1} · $simLabel"
+                        }
+                }.getOrDefault(emptyList())
+                if (!prefs.contains("subscription_id")) {
+                    val systemDefault = if (Build.VERSION.SDK_INT >= 24) SubscriptionManager.getDefaultSmsSubscriptionId() else -1
+                    selectedForwardSubId = if (systemDefault >= 0) systemDefault else availableForwardSims.firstOrNull()?.first ?: -1
+                }
+            }
+        }
         val scroll = rememberScrollState()
         Column(Modifier.fillMaxSize().verticalScroll(scroll).padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(if (isFa) "فوروارد خودکار پیامک" else "Automatic SMS forwarding", style = MaterialTheme.typography.titleLarge, color = TextWhite, fontWeight = FontWeight.Bold)
@@ -1907,10 +1882,29 @@ class MainActivity : ComponentActivity() {
                         prefs.edit().putString("source", source.trim()).putString("keyword", keyword.trim())
                             .putString("destination1", d1.trim()).putString("destination2", d2.trim()).putString("destination3", d3.trim())
                             .putString("start_time", startTime.trim()).putString("end_time", endTime.trim())
-                            .putBoolean("enabled", on).apply()
+                            .putInt("subscription_id", selectedForwardSubId).putBoolean("enabled", on).apply()
                         if (on) SmsForwarding.showStatus(this@MainActivity) else SmsForwarding.hideStatus(this@MainActivity)
                     }
                 })
+            }
+            Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(if (isFa) "سیم‌کارت ارسال فوروارد" else "SIM used for forwarding", color = TextWhite, fontWeight = FontWeight.Bold)
+                    Text(if (isFa) "برای گوشی‌های دو سیم‌کارته، سیم‌کارت را صریحاً انتخاب کن تا ارسال به انتخاب نامشخص سیستم وابسته نباشد." else "On dual-SIM phones, choose the SIM explicitly instead of relying on an ambiguous system default.", color = Muted, style = MaterialTheme.typography.bodySmall)
+                    Row(Modifier.fillMaxWidth().clickable { selectedForwardSubId = -1 }, verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected = selectedForwardSubId == -1, onClick = { selectedForwardSubId = -1 })
+                        Text(if (isFa) "سیم‌کارت پیش‌فرض گوشی / خودکار" else "Phone default / automatic", color = TextWhite)
+                    }
+                    availableForwardSims.forEach { (id, label) ->
+                        Row(Modifier.fillMaxWidth().clickable { selectedForwardSubId = id }, verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(selected = selectedForwardSubId == id, onClick = { selectedForwardSubId = id })
+                            Text(label, color = TextWhite)
+                        }
+                    }
+                    if (availableForwardSims.isEmpty()) {
+                        Text(if (isFa) "سیم‌کارتی شناسایی نشد. مجوز Phone را بررسی کن و صفحه را دوباره باز کن." else "No active SIM found. Check Phone permission and reopen this page.", color = Color(0xFFFFC078), style = MaterialTheme.typography.bodySmall)
+                    }
+                }
             }
             Text(if (isFa) "بازه فعال بودن فوروارد (ساعت ۲۴ ساعته)" else "Forwarding active window (24-hour clock)", color = TextWhite, fontWeight = FontWeight.Medium)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1949,7 +1943,7 @@ class MainActivity : ComponentActivity() {
                         android.widget.Toast.makeText(this@MainActivity, if (isFa) "ساعت شروع و پایان باید به شکل HH:mm و در قالب ۲۴ ساعته باشند." else "Enter valid 24-hour times in HH:mm format.", android.widget.Toast.LENGTH_LONG).show()
                         return@Button
                     }
-                    prefs.edit().putString("source", source.trim()).putString("keyword", keyword.trim()).putString("destination1", d1.trim()).putString("destination2", d2.trim()).putString("destination3", d3.trim()).putString("start_time", startTime.trim()).putString("end_time", endTime.trim()).putBoolean("enabled", enabled).apply()
+                    prefs.edit().putString("source", source.trim()).putString("keyword", keyword.trim()).putString("destination1", d1.trim()).putString("destination2", d2.trim()).putString("destination3", d3.trim()).putString("start_time", startTime.trim()).putString("end_time", endTime.trim()).putInt("subscription_id", selectedForwardSubId).putBoolean("enabled", enabled).apply()
                     if (enabled) SmsForwarding.showStatus(this@MainActivity) else SmsForwarding.hideStatus(this@MainActivity)
                     android.widget.Toast.makeText(this@MainActivity, if (isFa) "تنظیمات فوروارد ذخیره شد." else "Forwarding settings saved.", android.widget.Toast.LENGTH_SHORT).show()
                 }
@@ -1973,8 +1967,7 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable private fun SettingsPage(isFa: Boolean, language: String, changeLanguage: (String) -> Unit, requestRole: () -> Unit, bgChoice: Int, changeBackground: (Int) -> Unit) {
-        val roleSignal = smsRoleRefreshSignal
-        val isDefault = remember(roleSignal) { Telephony.Sms.getDefaultSmsPackage(this) == packageName }
+        val isDefault = Telephony.Sms.getDefaultSmsPackage(this) == packageName
         Column(Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -2059,6 +2052,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+
             Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(if (isFa) "زبان برنامه" else "App language", color = TextWhite, fontWeight = FontWeight.Bold)
@@ -2072,10 +2066,7 @@ class MainActivity : ComponentActivity() {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(if (isFa) "پیام‌رسان پیش‌فرض" else "Default SMS app", color = TextWhite, fontWeight = FontWeight.Bold)
                     Text(if (isDefault) { if (isFa) "این برنامه پیام‌رسان پیش‌فرض است." else "This app is the default SMS handler." } else { if (isFa) "برای فیلتر و مدیریت کامل پیامک‌ها، این برنامه را به‌عنوان پیام‌رسان پیش‌فرض انتخاب کنید." else "Set this app as the default SMS handler to filter and manage messages." }, color = Muted)
-                    Button(onClick = requestRole, modifier = Modifier.fillMaxWidth()) {
-                        Text(if (isDefault) { if (isFa) "بررسی و تکمیل مجوزهای پیامک" else "Check and grant SMS permissions" } else { if (isFa) "انتخاب به‌عنوان پیام‌رسان پیش‌فرض" else "Set as default SMS app" })
-                    }
-                    if (isDefault) Text(if (isFa) "نقش پیام‌رسان پیش‌فرض فعال است؛ با این دکمه مجوزهای لازم نیز بررسی می‌شوند." else "The default SMS role is active. This button also checks required permissions.", color = Muted, style = MaterialTheme.typography.bodySmall)
+                    Button(onClick = requestRole, modifier = Modifier.fillMaxWidth()) { Text(if (isDefault) { if (isFa) "برنامه پیش‌فرض فعال است" else "Already the default SMS app" } else { if (isFa) "انتخاب به‌عنوان پیام‌رسان پیش‌فرض" else "Set as default SMS app" }) }
                 }
             }
             Text(if (isFa) "برای فیلتر پیامک‌های ورودی، برنامه باید پیام‌رسان پیش‌فرض گوشی باشد." else "To filter incoming messages, this app must be the phone's default SMS app.", color = Muted, style = MaterialTheme.typography.bodySmall)
