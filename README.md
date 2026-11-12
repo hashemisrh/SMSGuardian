@@ -111,3 +111,18 @@ Build fix v1.0.2: removed invalid references to `Manifest.permission.WRITE_SMS`.
 ### SMS group behavior
 
 This is an in-app SMS group, not carrier Group MMS. The app sends a separate SMS to each member. Incoming SMS from group members after the group was created are shown in the group timeline and labeled by sender. Since ordinary SMS has no group-thread identifier, the app cannot prove that every such incoming message was a reply to that group; unrelated messages from those members may also appear. Group metadata and locally grouped outgoing messages are stored in app preferences.
+
+## Version 1.2.3 – forwarding reliability and interface updates
+
+- Automatic forwarding now waits for Android's per-part SMS send callbacks before counting a destination as successful or inserting the forwarded copy into Sent history. Failed modem/network submissions are recorded as failures rather than appearing as sent messages.
+- The forwarding path explicitly resolves the system's preferred SMS subscription and logs the selected subscription and callback result codes.
+- The default-SMS button now checks/requests the required permissions when the app already holds the default SMS role.
+- Renamed the visible app title to «مدیریت پیامک», removed the App Icon section from Settings, refreshed the navigation drawer and About page, and added two-finger pinch zoom for message text.
+
+### Redmi Note 15 forwarding verification
+
+1. Set «مدیریت پیامک» as the default SMS app and grant SMS permissions.
+2. In Android/HyperOS SIM settings, confirm the preferred SIM for SMS is selected.
+3. First test forwarding to one destination, then test all configured destinations and a multipart (long) message.
+4. Check the forwarding history after Android returns the send callbacks. A destination is counted as successful only when all parts receive `RESULT_OK`; this confirms submission to the mobile network, not final handset delivery.
+5. For diagnostics, capture `adb logcat -s SMSForwarding` and share the output if a failure remains.
